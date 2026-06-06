@@ -1,0 +1,10 @@
+flask
+flask-sock
+yfinance
+requests
+pandas
+pandas-datareader
+numpy
+scikit-learn
+scipy
+hmmlearn

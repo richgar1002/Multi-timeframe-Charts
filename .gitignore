@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.env
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+
+# Logs
+*.log
+
+# Rust build artifacts
+order_flow_engine/target/
+order_flow_engine/as_wrapper/
+order_flow_engine/bin/
+order_flow_engine/.cargo/
+
+# Dev/probe scripts
+_route_probe_server.py
+_run_5000_probe.py
+_run_5002.py
+redirect_5000.py
