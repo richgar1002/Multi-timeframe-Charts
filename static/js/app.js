@@ -174,6 +174,8 @@ function initGrid() {
             bbands: false,
             vwrsi: false,
             vwmacd: false,
+            bvd: false,
+            deltaProfile: false,
             atr: false,
             divergence: false,
             regime: true,
@@ -704,7 +706,8 @@ function createChartPane(paneId, initialSymbol, initialTimeframe, initialIndicat
                     <div class="menu-title">Oscillators</div>
                     ${indicatorRow("vwrsi", "VW-RSI", "vwrsi")}
                     ${indicatorRow("vwmacd", "VW-MACD", "vwmacd")}
-                    ${indicatorRow("atr", "ATR", "atr")}
+                    ${indicatorRow("bvd", "Bar Vol Delta")}
+                    ${indicatorRow("atr", "ATR")}
                     ${indicatorRow("divergence", "Divergence")}
                     <div class="menu-divider"></div>
                     <div class="menu-title">Context</div>
@@ -713,6 +716,10 @@ function createChartPane(paneId, initialSymbol, initialTimeframe, initialIndicat
                     <div class="menu-divider"></div>
                     <div class="menu-title">Chart</div>
                     <div class="quick-settings-group">
+                        <div class="settings-row settings-toggle-row">
+                            <label for="${paneId}-quick-delta-profile">Delta Profile</label>
+                            <input type="checkbox" id="${paneId}-quick-delta-profile" data-indicator="deltaProfile">
+                        </div>
                         <div class="settings-row settings-toggle-row">
                             <label for="${paneId}-quick-vert-grid">Vertical Grid</label>
                             <input type="checkbox" id="${paneId}-quick-vert-grid" data-setting="showVertGrid">
@@ -821,10 +828,24 @@ function createChartPane(paneId, initialSymbol, initialTimeframe, initialIndicat
             </div>
         </div>
         <div class="pane-body" id="${paneId}-body">
-            <div class="of-left-panel" id="${paneId}-of-panel"></div>
-            <div class="chart-column" id="${paneId}-chart-col">
-                <div class="chart-container-inner" id="${paneId}-container"></div>
-                <div class="pane-loading" id="${paneId}-loading">Loading data...</div>
+            <!-- Main chart area: Delta | Candles+Footprint | VP -->
+            <div class="chart-main-area" id="${paneId}-main-area">
+                <div class="of-left-panel" id="${paneId}-of-panel">
+                    <canvas class="delta-canvas" id="${paneId}-delta-canvas"></canvas>
+                </div>
+                <div class="chart-column" id="${paneId}-chart-col">
+                    <div class="chart-container-inner" id="${paneId}-container"></div>
+                    <div class="pane-loading" id="${paneId}-loading">Loading data...</div>
+                </div>
+                <div class="vp-right-panel" id="${paneId}-vp-right">
+                    <canvas class="vp-canvas" id="${paneId}-vp-canvas"></canvas>
+                </div>
+            </div>
+            <!-- Subchart oscillator area (panels shown/hidden when toggled) -->
+            <div class="subcharts-area" id="${paneId}-subcharts"></div>
+            <!-- Time axis at the very bottom -->
+            <div class="time-axis" id="${paneId}-time-axis">
+                <canvas class="time-axis-canvas" id="${paneId}-time-canvas"></canvas>
             </div>
         </div>
     `;
@@ -864,11 +885,20 @@ function createChartPane(paneId, initialSymbol, initialTimeframe, initialIndicat
         lastCvd: 0,
         historyData: [],
         volumeProfileData: [],
+        subchartPanels: {},  // {oscId: {panel, canvas, ctx, height, ...}}
+        subchartData: {},    // cached oscillator data for redraw on scroll
         dom: {
             container:  document.getElementById(`${paneId}-container`),
             body:       document.getElementById(`${paneId}-body`),
+            mainArea:   document.getElementById(`${paneId}-main-area`),
             ofPanel:    document.getElementById(`${paneId}-of-panel`),
+            deltaCanvas:document.getElementById(`${paneId}-delta-canvas`),
             chartCol:   document.getElementById(`${paneId}-chart-col`),
+            vpRight:    document.getElementById(`${paneId}-vp-right`),
+            vpCanvas:   document.getElementById(`${paneId}-vp-canvas`),
+            subchartsArea:document.getElementById(`${paneId}-subcharts`),
+            timeAxis:   document.getElementById(`${paneId}-time-axis`),
+            timeCanvas: document.getElementById(`${paneId}-time-canvas`),
             loading:    document.getElementById(`${paneId}-loading`),
             priceLabel: document.getElementById(`${paneId}-price-label`),
             cvdValue: document.getElementById(`${paneId}-cvd-val`),
@@ -946,6 +976,8 @@ function createChartPane(paneId, initialSymbol, initialTimeframe, initialIndicat
     indMenu.querySelector('[data-indicator="vwrsi"]').checked = paneObj.indicators.vwrsi || false;
     indMenu.querySelector('[data-indicator="vwmacd"]').checked = paneObj.indicators.vwmacd || false;
     indMenu.querySelector('[data-indicator="atr"]').checked = paneObj.indicators.atr || false;
+    indMenu.querySelector('[data-indicator="bvd"]').checked = paneObj.indicators.bvd || false;
+    indMenu.querySelector('[data-indicator="deltaProfile"]').checked = paneObj.indicators.deltaProfile || false;
     indMenu.querySelector('[data-indicator="divergence"]').checked = paneObj.indicators.divergence || false;
     indMenu.querySelector('[data-indicator="regime"]').checked = paneObj.indicators.regime || false;
     indMenu.querySelector('[data-indicator="vol"]').checked = paneObj.indicators.vol || false;
@@ -1234,8 +1266,8 @@ function initDrawingTools(pane) {
     });
     toolbar.appendChild(clearBtn);
 
-    // Inject toolbar as first flex child of pane-body (left column)
-    const paneBody = pane.dom.body || container;
+    // Inject toolbar as first flex child of chart-main-area (left column)
+    const paneBody = pane.dom.mainArea || pane.dom.body || container;
     paneBody.insertBefore(toolbar, paneBody.firstChild);
     pane.drawingToolbar = toolbar;
     pane.activeTool = 'cursor';
@@ -1477,9 +1509,17 @@ function renderDrawings(pane) {
             const y = pane.candleSeries.priceToCoordinate(p[0].price);
             if (y === null) { ctx.restore(); return; }
             ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+            const rightScaleW = (pane.chart && pane.chart.priceScale('right').width && typeof pane.chart.priceScale('right').width === 'function' && pane.chart.priceScale('right').width()) || 65;
+            const labelText = formatPrice(p[0].price);
             ctx.font = '10px "Space Grotesk", monospace';
+            const textW = ctx.measureText(labelText).width;
+            const labelX = W - rightScaleW + 6;
             ctx.globalAlpha *= 0.85;
-            ctx.fillText(formatPrice(p[0].price), W - 72, y - 4);
+            // Background pill
+            ctx.fillStyle = 'rgba(11, 14, 20, 0.88)';
+            ctx.fillRect(labelX - 2, y - 13, textW + 6, 14);
+            ctx.fillStyle = '#8e9aaf';
+            ctx.fillText(labelText, labelX, y - 4);
 
         } else if (type === 'vline' && p[0]) {
             const px = chartCoordsToPixel(pane, p[0].price, p[0].time);
@@ -1609,7 +1649,8 @@ function initLightweightChart(pane) {
             borderColor: '#2a3347',
             timeVisible: true,
             secondsVisible: false,
-            rightOffset: 8,
+            rightOffset: 12,
+            visible: false,
             tickMarkFormatter: (time) => formatChartTickMark(pane, time)
         },
         rightPriceScale: {
@@ -1720,21 +1761,6 @@ function initLightweightChart(pane) {
         visible: false
     });
 
-    // ATR Series
-    const atrSeries = chart.addLineSeries({
-        color: '#ab47bc',
-        lineWidth: 1.5,
-        title: 'ATR',
-        priceScaleId: 'atr-scale',
-        priceLineVisible: false,
-        lastValueVisible: false,
-        visible: false
-    });
-    chart.priceScale('atr-scale').applyOptions({
-        borderColor: '#2a3347',
-        visible: false
-    });
-    
     // 4. Add hidden CVD Series (metric source only)
     const cvdSeries = chart.addLineSeries({
         color: '#706fd3',
@@ -1745,129 +1771,46 @@ function initLightweightChart(pane) {
         lastValueVisible: false,
         visible: false
     });
-
-    // Add Volume Weighted RSI Line Series
-    const vwrsiSeries = chart.addLineSeries({
-        color: '#ff9f43',
-        lineWidth: 2,
-        title: 'VW-RSI',
-        priceScaleId: 'vwrsi-scale',
-        priceLineVisible: false,
-        lastValueVisible: false,
+    chart.priceScale('cvd-scale').applyOptions({
+        borderColor: '#2a3347',
         visible: false
     });
     
-    vwrsiSeries.createPriceLine({
-        price: 20,
-        color: '#ff1744',
-        lineWidth: 1,
-        lineStyle: 2,
-        axisLabelVisible: false,
-        title: '20'
-    });
-    vwrsiSeries.createPriceLine({
-        price: 80,
-        color: '#00e676',
-        lineWidth: 1,
-        lineStyle: 2,
-        axisLabelVisible: false,
-        title: '80'
-    });
-    vwrsiSeries.createPriceLine({
-        price: 50,
-        color: '#7c8ba1',
-        lineWidth: 1,
-        lineStyle: 2,
-        axisLabelVisible: false,
-        title: '50'
-    });
-
-    // Add Volume Weighted MACD Series
-    const vwMacdLineSeries = chart.addLineSeries({
-        color: '#29b6f6',
-        lineWidth: 1.5,
-        title: 'VW-MACD',
-        priceScaleId: 'vwmacd-scale',
-        priceLineVisible: false,
-        lastValueVisible: false,
-        visible: false
-    });
-    const vwMacdSignalSeries = chart.addLineSeries({
-        color: '#ab47bc',
-        lineWidth: 1.5,
-        title: 'Signal',
-        priceScaleId: 'vwmacd-scale',
-        priceLineVisible: false,
-        lastValueVisible: false,
-        visible: false
-    });
-    const vwMacdHistSeries = chart.addHistogramSeries({
-        priceScaleId: 'vwmacd-scale',
-        priceLineVisible: false,
-        lastValueVisible: false,
-        visible: false
-    });
-    
-    // Add Volatility Study series
-    const volHvSeries = chart.addLineSeries({
-        color: '#00bcd4',
-        lineWidth: 1.5,
-        title: 'HV%ile',
-        priceScaleId: 'vol-scale',
-        priceLineVisible: false,
-        lastValueVisible: false,
-        visible: false
-    });
-    const volAtrSeries = chart.addLineSeries({
-        color: '#ff9800',
-        lineWidth: 1,
-        title: 'ATR%ile',
-        priceScaleId: 'vol-scale',
-        priceLineVisible: false,
-        lastValueVisible: false,
-        visible: false
-    });
-
-    // Configure all scales to render with grid colors
-    const scaleIds = ['cvd-scale', 'vwrsi-scale', 'vwmacd-scale', 'atr-scale', 'vol-scale'];
-    scaleIds.forEach(id => {
-        chart.priceScale(id).applyOptions({
-            borderColor: '#2a3347',
-            visible: false
-        });
-    });
-    
-    // Price scale margins for candlesticks
+    // Price scale margins for candlesticks (no bottom reserved for oscillators anymore)
     chart.priceScale('right').applyOptions({
         scaleMargins: {
             top: 0.05,
-            bottom: 0.3
+            bottom: 0.05
         }
     });
 
-    // Create Volume Profile overlay canvas
-    const canvas = document.createElement('canvas');
-    canvas.className = 'volume-profile-canvas';
-    pane.dom.container.appendChild(canvas);
-    pane.volumeProfileCanvas = canvas;
+    // Volume Profile canvas — rendered in right panel instead of overlay
+    pane.volumeProfileCanvas = pane.dom.vpCanvas;
+    if (pane.volumeProfileCanvas) {
+        pane.volumeProfileCanvas.width = pane.dom.vpRight.clientWidth || 80;
+        pane.volumeProfileCanvas.height = pane.dom.container.clientHeight || 200;
+    }
+    // Delta Profile canvas — rendered in left panel
+    if (pane.dom.deltaCanvas) {
+        pane.dom.deltaCanvas.width = pane.dom.ofPanel.clientWidth || 80;
+        pane.dom.deltaCanvas.height = pane.dom.container.clientHeight || 200;
+    }
+    // Time axis canvas
+    if (pane.dom.timeCanvas) {
+        pane.dom.timeCanvas.width = pane.dom.timeAxis.clientWidth || 300;
+        pane.dom.timeCanvas.height = pane.dom.timeAxis.clientHeight || 24;
+    }
 
     const decorationOverlay = document.createElement('div');
     decorationOverlay.className = 'chart-decoration-overlay';
     pane.dom.container.appendChild(decorationOverlay);
     pane.decorationOverlay = decorationOverlay;
 
-    const subchartOverlay = document.createElement('div');
-    subchartOverlay.className = 'subchart-overlay';
-    pane.dom.container.appendChild(subchartOverlay);
-    pane.subchartOverlay = subchartOverlay;
-    
-    // Automatically resize the chart when the container size changes
+    // Auto-resize chart and subchart canvases when container changes
     const resizeObserver = new ResizeObserver(entries => {
         if (entries.length === 0 || !entries[0].contentRect) return;
         const { width, height } = entries[0].contentRect;
         chart.resize(width, height);
-        canvas.width = width;
-        canvas.height = height;
         if (pane.drawingCanvas) {
             pane.drawingCanvas.width = width;
             pane.drawingCanvas.height = height;
@@ -1876,9 +1819,35 @@ function initLightweightChart(pane) {
             pane.fpCanvas.width  = width;
             pane.fpCanvas.height = height;
         }
+        // Resize VP canvas in right panel
+        if (pane.dom.vpCanvas) {
+            pane.dom.vpCanvas.width = pane.dom.vpRight.clientWidth || 80;
+            pane.dom.vpCanvas.height = pane.dom.container.clientHeight || 200;
+        }
+        // Resize delta canvas in left panel
+        if (pane.dom.deltaCanvas) {
+            pane.dom.deltaCanvas.width = pane.dom.ofPanel.clientWidth || 80;
+            pane.dom.deltaCanvas.height = pane.dom.container.clientHeight || 200;
+        }
+        // Resize all subchart canvases
+        Object.values(pane.subchartPanels).forEach(sp => {
+            const wrap = sp.canvas.parentElement;
+            if (wrap) {
+                sp.canvas.width = wrap.clientWidth;
+                sp.canvas.height = wrap.clientHeight;
+            }
+        });
+        // Resize time axis canvas
+        if (pane.dom.timeCanvas) {
+            pane.dom.timeCanvas.width = pane.dom.timeAxis.clientWidth || 300;
+            pane.dom.timeCanvas.height = pane.dom.timeAxis.clientHeight || 24;
+        }
         requestVolumeProfileDraw(pane);
         renderDrawings(pane);
         renderFootprint(pane);
+        renderAllSubcharts(pane);
+        drawDeltaProfile(pane);
+        renderTimeAxis(pane);
     });
     resizeObserver.observe(pane.dom.container);
 
@@ -1886,7 +1855,57 @@ function initLightweightChart(pane) {
         requestVolumeProfileDraw(pane);
         renderDrawings(pane);
         renderFootprint(pane);
+        renderAllSubcharts(pane);
+        drawDeltaProfile(pane);
+        renderTimeAxis(pane);
     });
+
+    // --- Time axis drag-to-pan ---
+    const timeCanvas = pane.dom.timeCanvas;
+    if (timeCanvas) {
+        let taDragging = false;
+        let taStartX = 0;
+        let taStartRange = null;
+
+        timeCanvas.addEventListener('mousedown', (e) => {
+            const ts = chart.timeScale();
+            const vr = ts.getVisibleRange();
+            if (!vr) return;
+            taDragging = true;
+            taStartX = e.clientX;
+            taStartRange = { from: vr.from, to: vr.to };
+            timeCanvas.style.cursor = 'grabbing';
+            e.preventDefault();
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!taDragging || !taStartRange) return;
+            const dx = e.clientX - taStartX;
+            if (Math.abs(dx) < 1) return;
+
+            const contRect = pane.dom.container.getBoundingClientRect();
+            const effectiveWidth = contRect.width;
+            if (effectiveWidth <= 0) return;
+
+            const span = taStartRange.to - taStartRange.from;
+            const shift = (dx / effectiveWidth) * span;
+
+            chart.timeScale().setVisibleRange({
+                from: taStartRange.from - shift,
+                to: taStartRange.to - shift,
+            });
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (taDragging) {
+                taDragging = false;
+                taStartRange = null;
+                timeCanvas.style.cursor = 'grab';
+            }
+        });
+
+        timeCanvas.style.cursor = 'grab';
+    }
 
     initDrawingTools(pane);
     initFootprintForPane(pane);
@@ -1904,15 +1923,8 @@ function initLightweightChart(pane) {
     pane.bbUpperSeries = bbUpperSeries;
     pane.bbMiddleSeries = bbMiddleSeries;
     pane.bbLowerSeries = bbLowerSeries;
-    pane.atrSeries = atrSeries;
     pane.cvdSeries = cvdSeries;
     pane.divergenceMarkers = [];
-    pane.vwrsiSeries = vwrsiSeries;
-    pane.vwMacdLineSeries = vwMacdLineSeries;
-    pane.vwMacdSignalSeries = vwMacdSignalSeries;
-    pane.vwMacdHistSeries = vwMacdHistSeries;
-    pane.volHvSeries = volHvSeries;
-    pane.volAtrSeries = volAtrSeries;
 }
 
 // --- DATA ACTIONS & SYMBOL / TIMEFRAME UPDATES ---
@@ -2091,6 +2103,7 @@ async function loadHistoricalData(pane) {
                 requestVolumeProfileDraw(pane);
                 renderDrawings(pane);
                 renderFootprint(pane);
+                renderTimeAxis(pane);
             });
         } else {
             pane.candleSeries.setData([]);
@@ -3106,58 +3119,14 @@ function clearDivergenceMarkers(pane) {
 }
 
 function updatePriceScaleMargins(pane) {
-    const inds = pane.indicators;
-    const settings = inds.settings || {};
-
-    const activeScales = [];
-    if (inds.vwrsi) activeScales.push('vwrsi-scale');
-    if (inds.vwmacd) activeScales.push('vwmacd-scale');
-    if (inds.vol) activeScales.push('vol-scale');
-
-    const N = activeScales.length;
-    const defaultH = Math.max(10, Math.min(45, settings.oscillatorHeightPct || 22));
-    const oscHeights = settings.oscillatorHeights || {};
-    const heights = activeScales.map(scaleId => {
-        const key = scaleId.replace('-scale', '');
-        return Math.max(10, Math.min(45, oscHeights[key] ?? defaultH));
-    });
-    const totalBand = N > 0 ? heights.reduce((s, h) => s + h, 0) / 100 : 0;
-    const mainBottomMargin = N > 0 ? totalBand : 0.05;
-    pane.subchartBoundaries = [];
-
+    // Main chart only — oscillators are now separate subchart panels
     pane.chart.priceScale('right').applyOptions({
         scaleMargins: {
             top: 0.05,
-            bottom: mainBottomMargin
+            bottom: 0.05
         }
     });
-
-    let cumBand = 0;
-    activeScales.forEach((scaleId, idx) => {
-        const h = heights[idx] / 100;
-        const slotStart = 1 - totalBand + cumBand;
-        const slotEnd = slotStart + h;
-        const top = slotStart + 0.04;
-        const bottom = Math.max(0.02, 1 - (slotEnd - 0.02));
-
-        pane.chart.priceScale(scaleId).applyOptions({
-            autoScale: true,
-            scaleMargins: {
-                top: top,
-                bottom: bottom
-            }
-        });
-
-        pane.subchartBoundaries.push({
-            scaleId,
-            top,
-            bottom,
-            panelTop: slotStart,
-            panelBottom: Math.max(0, 1 - slotEnd)
-        });
-
-        cumBand += h;
-    });
+    pane.subchartBoundaries = [];
 }
 
 function updateMetricLabels(pane) {
@@ -3224,153 +3193,625 @@ function applyChartSettings(pane) {
     });
 }
 
-function getSubchartScaleMeta(pane, scaleId) {
-    const settings = pane.indicators.settings || {};
+// ─── SUBCHART PANEL ENGINE ──────────────────────────────────────────────────
+// Oscillators are rendered as separate canvas panels below the main chart.
 
-    if (scaleId === "vwrsi-scale") {
-        return {
-            title: "VW-RSI",
-            labels: [
-                { price: 80, text: "80" },
-                { price: 50, text: "50" },
-                { price: 20, text: "20" }
-            ]
-        };
+const SUBCHART_DEFS = {
+    vwrsi: {
+        title: 'VW-RSI',
+        defaultHeight: 120,
+        minHeight: 30,
+        maxHeight: 9999,
+        render: renderSubchartVWRSI,
+        compute: (pane, settings) => calculateVWRSI(pane.historyData, settings.vwrsiPeriod || 14)
+    },
+    vwmacd: {
+        title: 'VW-MACD',
+        defaultHeight: 130,
+        minHeight: 30,
+        maxHeight: 9999,
+        render: renderSubchartVWMACD,
+        compute: (pane, settings) => calculateVWMACD(pane.historyData, settings.vwmacdFast || 12, settings.vwmacdSlow || 26, settings.vwmacdSignal || 9)
+    },
+    bvd: {
+        title: 'BAR VOL DELTA',
+        defaultHeight: 100,
+        minHeight: 30,
+        maxHeight: 9999,
+        render: renderSubchartBVD,
+        compute: (pane, settings) => calculateBarVolumeDelta(pane.historyData)
+    },
+    vol: {
+        title: 'VOLATILITY',
+        defaultHeight: 120,
+        minHeight: 30,
+        maxHeight: 9999,
+        render: renderSubchartVol,
+        compute: (pane, settings) => {
+            const hv = calculateHV(pane.historyData, settings.hvWindow || 20);
+            const atrPct = calculateAtrPct(pane.historyData, settings.atrPeriod || 14);
+            const rankWindow = settings.volRankWindow || 252;
+            return {
+                hvPct: calculateRollingPercentile(hv, rankWindow).filter(d => d.value !== null),
+                atrPct: calculateRollingPercentile(atrPct, rankWindow).filter(d => d.value !== null)
+            };
+        }
     }
+};
 
-    if (scaleId === "vwmacd-scale") {
-        const vwmacd = calculateVWMACD(
-            pane.historyData,
-            settings.vwmacdFast || 12,
-            settings.vwmacdSlow || 26,
-            settings.vwmacdSignal || 9
-        );
-        const values = [
-            ...vwmacd.macd.map(point => point.value),
-            ...vwmacd.signal.map(point => point.value),
-            ...vwmacd.histogram.map(point => point.value),
-            0
-        ].filter(value => Number.isFinite(value));
-        const min = values.length ? Math.min(...values) : 0;
-        const max = values.length ? Math.max(...values) : 0;
+function ensureSubchartPanel(pane, oscId) {
+    if (pane.subchartPanels[oscId]) return pane.subchartPanels[oscId];
+    const def = SUBCHART_DEFS[oscId];
+    if (!def) return null;
 
-        return {
-            title: "VW-MACD",
-            labels: [
-                { price: max, text: max.toFixed(2) },
-                { price: 0, text: "0.00" },
-                { price: min, text: min.toFixed(2) }
-            ]
+    const subchartsEl = pane.dom.subchartsArea;
+    if (!subchartsEl) return null;
+
+    // Create panel DOM
+    const panel = document.createElement('div');
+    panel.className = 'subchart-panel';
+    panel.dataset.osc = oscId;
+
+    const dragHandle = document.createElement('div');
+    dragHandle.className = 'subchart-drag-handle';
+    panel.appendChild(dragHandle);
+
+    const header = document.createElement('div');
+    header.className = 'subchart-header';
+    header.textContent = def.title;
+    panel.appendChild(header);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'subchart-canvas-wrap';
+    const canvas = document.createElement('canvas');
+    canvas.className = 'subchart-canvas';
+    wrap.appendChild(canvas);
+    panel.appendChild(wrap);
+
+    subchartsEl.appendChild(panel);
+
+    // Set initial panel height so it's visible on first load
+    panel.style.height = def.defaultHeight + 'px';
+
+    // Size canvas
+    const rect = wrap.getBoundingClientRect();
+    canvas.width = rect.width || 200;
+    canvas.height = rect.height || def.defaultHeight;
+
+    // Drag-to-resize
+    let dragActive = false;
+    const onDragStart = (e) => {
+        e.preventDefault();
+        dragActive = true;
+        const startY = e.clientY;
+        const startH = panel.getBoundingClientRect().height;
+        const onMove = (me) => {
+            if (!dragActive) return;
+            const delta = startY - me.clientY;
+            const newH = Math.max(def.minHeight, Math.min(def.maxHeight, startH + delta));
+            panel.style.height = newH + 'px';
+            canvas.width = wrap.clientWidth;
+            canvas.height = wrap.clientHeight;
+            renderAllSubcharts(pane);
         };
-    }
-
-    if (scaleId === "vol-scale") {
-        return {
-            title: "VOLATILITY",
-            labels: [
-                { price: 90, text: "Extr" },
-                { price: 75, text: "High" },
-                { price: 25, text: "Low" },
-            ]
+        const onUp = () => {
+            dragActive = false;
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
         };
-    }
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    };
+    dragHandle.addEventListener('mousedown', onDragStart);
 
-    return { title: "", labels: [] };
+    const sp = { panel, canvas, ctx: canvas.getContext('2d'), wrap, def, dragHandle };
+    pane.subchartPanels[oscId] = sp;
+    return sp;
 }
 
-function getRepresentativeSeriesForScale(pane, scaleId) {
-    if (scaleId === "vwrsi-scale") return pane.vwrsiSeries;
-    if (scaleId === "vwmacd-scale") return pane.vwMacdLineSeries;
-    if (scaleId === "vol-scale") return pane.volHvSeries;
-    return null;
+function removeSubchartPanel(pane, oscId) {
+    const sp = pane.subchartPanels[oscId];
+    if (!sp) return;
+    sp.panel.remove();
+    delete pane.subchartPanels[oscId];
 }
 
-function renderSubchartBorders(pane) {
-    if (!pane.subchartOverlay) return;
+function renderAllSubcharts(pane) {
+    if (!pane.historyData || pane.historyData.length === 0) return;
+    const inds = pane.indicators;
+    const settings = inds.settings || {};
 
-    pane.subchartOverlay.innerHTML = "";
-    if (!pane.subchartBoundaries || pane.subchartBoundaries.length === 0) {
-        return;
-    }
+    // Ensure panels exist for enabled oscillators
+    const activeOscs = [];
+    if (inds.vwrsi) activeOscs.push('vwrsi');
+    if (inds.vwmacd) activeOscs.push('vwmacd');
+    if (inds.bvd) activeOscs.push('bvd');
+    if (inds.vol) activeOscs.push('vol');
 
-    pane.subchartBoundaries.forEach((boundary, index) => {
-        const containerHeight = pane.dom.container.clientHeight || 1;
-        const panelTopRatio = boundary.panelTop ?? boundary.top;
-        const panelBottomRatio = boundary.panelBottom ?? boundary.bottom;
-        const panelTopPx = panelTopRatio * containerHeight;
-        const panelBottomPx = panelBottomRatio * containerHeight;
-        const panelHeightPx = Math.max(1, containerHeight - panelTopPx - panelBottomPx);
-
-        const panel = document.createElement("div");
-        panel.className = "subchart-panel-border";
-        if (index === 0) {
-            panel.classList.add("subchart-panel-first");
+    // Remove panels for disabled oscillators
+    Object.keys(pane.subchartPanels).forEach(oscId => {
+        if (!activeOscs.includes(oscId)) {
+            removeSubchartPanel(pane, oscId);
         }
-        if (index === pane.subchartBoundaries.length - 1) {
-            panel.classList.add("subchart-panel-last");
-        }
-        panel.style.top = `calc(${(panelTopRatio * 100).toFixed(4)}% - 2px)`;
-        panel.style.bottom = index === pane.subchartBoundaries.length - 1
-            ? `calc(${(panelBottomRatio * 100).toFixed(4)}% - 2px)`
-            : `${(panelBottomRatio * 100).toFixed(4)}%`;
-
-        const dragHandle = document.createElement("div");
-        dragHandle.className = "subchart-drag-handle";
-        panel.appendChild(dragHandle);
-        const scaleKey = boundary.scaleId.replace('-scale', '');
-        dragHandle.addEventListener("mousedown", (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            const containerHeight = pane.dom.container.clientHeight || 1;
-            const startY = e.clientY;
-            const settings = pane.indicators.settings;
-            const defaultH = settings.oscillatorHeightPct || 22;
-            if (!settings.oscillatorHeights) settings.oscillatorHeights = {};
-            const startPct = settings.oscillatorHeights[scaleKey] ?? defaultH;
-            const onMove = (me) => {
-                const delta = -(me.clientY - startY) / containerHeight * 100;
-                const newPct = Math.round(Math.max(10, Math.min(45, startPct + delta)));
-                settings.oscillatorHeights[scaleKey] = newPct;
-                updatePriceScaleMargins(pane);
-                drawVolumeProfile(pane);
-            };
-            const onUp = () => {
-                document.removeEventListener("mousemove", onMove);
-                document.removeEventListener("mouseup", onUp);
-                localStorage.setItem(`pane_config_${pane.id}`, JSON.stringify({
-                    symbol: pane.symbol, timeframe: pane.timeframe, indicators: pane.indicators
-                }));
-            };
-            document.addEventListener("mousemove", onMove);
-            document.addEventListener("mouseup", onUp);
-        });
-
-        const header = document.createElement("div");
-        header.className = "subchart-panel-title";
-        const meta = getSubchartScaleMeta(pane, boundary.scaleId);
-        header.textContent = meta.title;
-        panel.appendChild(header);
-
-        const axisStrip = document.createElement("div");
-        axisStrip.className = "subchart-axis-strip";
-        panel.appendChild(axisStrip);
-
-        const representativeSeries = getRepresentativeSeriesForScale(pane, boundary.scaleId);
-        meta.labels.forEach(labelMeta => {
-            if (!representativeSeries) return;
-            const y = representativeSeries.priceToCoordinate(labelMeta.price);
-            if (y === null) return;
-            const localPct = Math.max(0, Math.min(100, ((y - panelTopPx) / panelHeightPx) * 100));
-
-            const label = document.createElement("div");
-            label.className = "subchart-axis-label";
-            label.textContent = labelMeta.text;
-            label.style.top = `${localPct.toFixed(4)}%`;
-            axisStrip.appendChild(label);
-        });
-
-        pane.subchartOverlay.appendChild(panel);
     });
+
+    // Ensure panels for enabled oscillators and render
+    activeOscs.forEach(oscId => {
+        const sp = ensureSubchartPanel(pane, oscId);
+        if (!sp) return;
+        const wrap = sp.wrap;
+        const rect = wrap.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+            sp.canvas.width = rect.width;
+            sp.canvas.height = rect.height;
+        }
+        const ctx = sp.ctx;
+        const w = sp.canvas.width;
+        const h = sp.canvas.height;
+        if (w < 10 || h < 10) return;
+
+        ctx.clearRect(0, 0, w, h);
+
+        // Compute X offset so subchart drawing aligns with candle chart
+        const contRect = pane.dom.container.getBoundingClientRect();
+        const canRect = sp.canvas.getBoundingClientRect();
+        const xOffset = contRect.left - canRect.left;
+
+        // Compute data and render
+        const def = SUBCHART_DEFS[oscId];
+        if (def.compute && def.render) {
+            const data = def.compute(pane, settings);
+            def.render(pane, ctx, w, h, data, settings, xOffset);
+        }
+    });
+}
+
+// ─── Grid & Axis helpers for subchart canvases ───────────────────────────
+
+function drawSubchartBackground(ctx, w, h) {
+    ctx.fillStyle = '#0b0e14';
+    ctx.fillRect(0, 0, w, h);
+}
+
+function drawSubchartGrid(ctx, w, h, numLines, leftMargin, rightMargin) {
+    ctx.strokeStyle = '#1a202c';
+    ctx.lineWidth = 1;
+    const chartW = w - leftMargin - rightMargin;
+    for (let i = 0; i < numLines; i++) {
+        const y = (i / (numLines - 1)) * h;
+        ctx.beginPath();
+        ctx.moveTo(leftMargin, y);
+        ctx.lineTo(leftMargin + chartW, y);
+        ctx.stroke();
+    }
+}
+
+function drawSubchartAxisRight(ctx, w, h, labels, title, rightMargin) {
+    const axisW = rightMargin;
+    const chartRight = w - axisW;
+
+    // Axis background
+    ctx.fillStyle = 'rgba(11, 14, 20, 0.95)';
+    ctx.fillRect(chartRight, 0, axisW, h);
+
+    // Separator line
+    ctx.strokeStyle = 'rgba(42, 51, 71, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(chartRight, 0);
+    ctx.lineTo(chartRight, h);
+    ctx.stroke();
+
+    // Labels
+    ctx.font = '10px "Space Grotesk", monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    labels.forEach(label => {
+        if (label.y === null || label.y === undefined) return;
+        const y = label.y;
+        if (y < 0 || y > h) return;
+        ctx.fillStyle = 'rgba(196, 206, 221, 0.9)';
+        ctx.fillText(label.text, w - 6, y);
+        // Small tick mark
+        ctx.strokeStyle = 'rgba(42, 51, 71, 0.5)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(chartRight, y);
+        ctx.lineTo(chartRight + 6, y);
+        ctx.stroke();
+    });
+
+    // Title at top
+    ctx.font = 'bold 9px "Space Grotesk", monospace';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = 'rgba(174, 186, 204, 0.7)';
+    ctx.fillText(title, w - 6, 4);
+}
+
+function getSubchartValueY(value, minVal, maxVal, h, margin) {
+    if (maxVal === minVal) return h / 2;
+    const range = maxVal - minVal;
+    return margin + ((maxVal - value) / range) * (h - 2 * margin);
+}
+
+// ─── VW-RSI Subchart ────────────────────────────────────────────────────
+
+function renderSubchartVWRSI(pane, ctx, w, h, data, settings, xOffset = 0) {
+    const leftMargin = 0;
+    const rightMargin = 74;
+    const chartW = w - leftMargin - rightMargin;
+    const topMargin = 4;
+
+    drawSubchartBackground(ctx, w, h);
+    drawSubchartGrid(ctx, w, h, 3, leftMargin, rightMargin);
+
+    if (!data || data.length < 2) return;
+
+    const timeScale = pane.chart.timeScale();
+
+    // Build visible points with pixel X coords from main chart's time scale
+    let visiblePoints = [];
+    for (let i = 0; i < data.length; i++) {
+        const d = data[i];
+        if (d.value === undefined) continue;
+        const x = timeScale.timeToCoordinate(d.time);
+        if (x === null) continue;
+        visiblePoints.push({ x: x + xOffset, value: d.value });
+    }
+
+    // Fallback: if timeToCoordinate returns null for all (e.g. chart settling), use linear interpolation
+    if (visiblePoints.length < 2) {
+        const ts = data.map(d => d.time).filter(t => t !== undefined);
+        if (ts.length < 2) return;
+        const visMin = ts[0], visMax = ts[ts.length - 1];
+        if (visMax <= visMin) return;
+        const chartW_ = w - leftMargin - rightMargin;
+        for (let i = 0; i < data.length; i++) {
+            const d = data[i];
+            if (d.value === undefined) continue;
+            const x = leftMargin + ((d.time - visMin) / (visMax - visMin)) * chartW_;
+            visiblePoints.push({ x, value: d.value });
+        }
+    }
+    if (visiblePoints.length < 2) return;
+
+    // Value range
+    const values = visiblePoints.map(d => d.value);
+    const minVal = 0, maxVal = 100;
+
+    // Reference lines (20, 50, 80)
+    const refLines = [
+        { value: 80, color: 'rgba(0, 230, 118, 0.25)' },
+        { value: 50, color: 'rgba(124, 139, 161, 0.25)' },
+        { value: 20, color: 'rgba(255, 23, 68, 0.25)' }
+    ];
+    refLines.forEach(ref => {
+        const y = getSubchartValueY(ref.value, 0, 100, h, topMargin);
+        ctx.strokeStyle = ref.color;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(leftMargin, y);
+        ctx.lineTo(leftMargin + chartW, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    });
+
+    // Draw line using pixel-perfect X coordinates
+    ctx.strokeStyle = '#ff9f43';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    visiblePoints.forEach((point, i) => {
+        const y = getSubchartValueY(point.value, minVal, maxVal, h, topMargin);
+        if (i === 0) ctx.moveTo(point.x, y);
+        else ctx.lineTo(point.x, y);
+    });
+    ctx.stroke();
+
+    // Axis labels
+    const axisLabels = [
+        { y: getSubchartValueY(80, minVal, maxVal, h, topMargin), text: '80' },
+        { y: getSubchartValueY(50, minVal, maxVal, h, topMargin), text: '50' },
+        { y: getSubchartValueY(20, minVal, maxVal, h, topMargin), text: '20' }
+    ];
+    drawSubchartAxisRight(ctx, w, h, axisLabels, 'VW-RSI', rightMargin);
+}
+
+// ─── VW-MACD Subchart ───────────────────────────────────────────────────
+
+function renderSubchartVWMACD(pane, ctx, w, h, data, settings, xOffset = 0) {
+    const leftMargin = 0;
+    const rightMargin = 74;
+    const chartW = w - leftMargin - rightMargin;
+    const topMargin = 4;
+
+    drawSubchartBackground(ctx, w, h);
+    drawSubchartGrid(ctx, w, h, 3, leftMargin, rightMargin);
+
+    if (!data || !data.macd || data.macd.length < 2) return;
+
+    const timeScale = pane.chart.timeScale();
+
+    // Filter visible points for MACD line, signal, histogram
+    function buildVisible(arr) {
+        const result = [];
+        for (let i = 0; i < arr.length; i++) {
+            const d = arr[i];
+            if (d.value === undefined) continue;
+            const x = timeScale.timeToCoordinate(d.time);
+            if (x === null) continue;
+            result.push({ x: x + xOffset, value: d.value, color: d.color });
+        }
+        // Fallback: linear interpolation if no timeToCoordinate results
+        if (result.length < 2 && arr.length >= 2) {
+            const ts = arr.map(a => a.time).filter(t => t !== undefined);
+            if (ts.length >= 2 && ts[ts.length-1] > ts[0]) {
+                const chartW_ = w - 0 - 74;
+                const span = ts[ts.length-1] - ts[0];
+                for (let j = 0; j < arr.length; j++) {
+                    const a = arr[j];
+                    if (a.value === undefined) continue;
+                    const x = ((a.time - ts[0]) / span) * chartW_;
+                    result.push({ x, value: a.value, color: a.color });
+                }
+            }
+        }
+        return result;
+    }
+    const visMacd = buildVisible(data.macd);
+    const visSignal = buildVisible(data.signal || []);
+    const visHist = Array.isArray(data.histogram) ? buildVisible(data.histogram) : [];
+    if (visMacd.length < 2) return;
+
+    // Find value range
+    let minVal = 0, maxVal = 0;
+    const allVals = [
+        ...visMacd.map(d => d.value),
+        ...visSignal.map(d => d.value),
+        ...visHist.map(d => d.value)
+    ].filter(v => Number.isFinite(v));
+    if (allVals.length > 0) {
+        const spread = Math.max(Math.abs(Math.min(...allVals)), Math.abs(Math.max(...allVals)));
+        minVal = -spread * 1.15;
+        maxVal = spread * 1.15;
+        if (minVal === maxVal) { minVal -= 1; maxVal += 1; }
+    }
+
+    // Zero line
+    const zeroY = getSubchartValueY(0, minVal, maxVal, h, topMargin);
+    ctx.strokeStyle = 'rgba(124, 139, 161, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(leftMargin, zeroY);
+    ctx.lineTo(leftMargin + chartW, zeroY);
+    ctx.stroke();
+
+    // Histogram
+    visHist.forEach(point => {
+        const y0 = zeroY;
+        const y1 = getSubchartValueY(point.value, minVal, maxVal, h, topMargin);
+        ctx.fillStyle = point.color || (point.value >= 0 ? '#00e676' : '#ff1744');
+        ctx.fillRect(point.x - 1, Math.min(y0, y1), Math.max(2, chartW / visHist.length * 0.7), Math.max(1, Math.abs(y1 - y0)));
+    });
+
+    // MACD line
+    ctx.strokeStyle = '#29b6f6';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    visMacd.forEach((point, i) => {
+        const y = getSubchartValueY(point.value, minVal, maxVal, h, topMargin);
+        if (i === 0) ctx.moveTo(point.x, y);
+        else ctx.lineTo(point.x, y);
+    });
+    ctx.stroke();
+
+    // Signal line
+    if (visSignal.length >= 2) {
+        ctx.strokeStyle = '#ab47bc';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        visSignal.forEach((point, i) => {
+            const y = getSubchartValueY(point.value, minVal, maxVal, h, topMargin);
+            if (i === 0) ctx.moveTo(point.x, y);
+            else ctx.lineTo(point.x, y);
+        });
+        ctx.stroke();
+    }
+
+    // Axis labels
+    const axisLabels = [
+        { y: getSubchartValueY(maxVal, minVal, maxVal, h, topMargin), text: maxVal.toFixed(2) },
+        { y: zeroY, text: '0.00' },
+        { y: getSubchartValueY(minVal, minVal, maxVal, h, topMargin), text: minVal.toFixed(2) }
+    ];
+    drawSubchartAxisRight(ctx, w, h, axisLabels, 'VW-MACD', rightMargin);
+}
+
+// ─── Bar Volume Delta Subchart ──────────────────────────────────────────
+
+function calculateBarVolumeDelta(data) {
+    if (!data || data.length === 0) return [];
+    const delta = [];
+    data.forEach(bar => {
+        // Approximate delta: close-open direction weighted by volume
+        // Positive: buyers aggressive, Negative: sellers aggressive
+        const dir = (bar.close - bar.open);
+        const vol = bar.volume || 0;
+        const val = dir * vol * 0.01;
+        delta.push({ time: bar.time, value: val });
+    });
+    return delta;
+}
+
+function renderSubchartBVD(pane, ctx, w, h, data, settings, xOffset = 0) {
+    const leftMargin = 0;
+    const rightMargin = 74;
+    const chartW = w - leftMargin - rightMargin;
+    const topMargin = 4;
+
+    drawSubchartBackground(ctx, w, h);
+
+    if (!data || data.length < 2) return;
+
+    const timeScale = pane.chart.timeScale();
+
+    // Build visible points
+    const visiblePoints = [];
+    for (let i = 0; i < data.length; i++) {
+        const d = data[i];
+        if (d.value === undefined) continue;
+        const x = timeScale.timeToCoordinate(d.time);
+        if (x === null) continue;
+        visiblePoints.push({ x: x + xOffset, value: d.value });
+    }
+    // Fallback: linear interpolation
+    if (visiblePoints.length < 2 && data.length >= 2) {
+        const ts = data.map(d => d.time).filter(t => t !== undefined);
+        if (ts.length >= 2 && ts[ts.length-1] > ts[0]) {
+            const span = ts[ts.length-1] - ts[0];
+            for (let i = 0; i < data.length; i++) {
+                const d = data[i];
+                if (d.value === undefined) continue;
+                const x = leftMargin + ((d.time - ts[0]) / span) * chartW;
+                visiblePoints.push({ x, value: d.value });
+            }
+        }
+    }
+    if (visiblePoints.length < 2) return;
+
+    // Find max absolute value
+    const vals = visiblePoints.map(d => d.value).filter(v => Number.isFinite(v));
+    const maxAbs = vals.length > 0 ? Math.max(Math.abs(Math.min(...vals)), Math.abs(Math.max(...vals)), 1) : 1;
+    const range = maxAbs * 1.15;
+
+    // Zero line
+    const zeroY = h / 2;
+    ctx.strokeStyle = 'rgba(124, 139, 161, 0.3)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(leftMargin, zeroY);
+    ctx.lineTo(leftMargin + chartW, zeroY);
+    ctx.stroke();
+
+    // Grid
+    drawSubchartGrid(ctx, w, h, 3, leftMargin, rightMargin);
+
+    // Delta bars
+    const barWidth = Math.max(1, chartW / visiblePoints.length * 0.7);
+    visiblePoints.forEach(point => {
+        const barH = Math.abs((point.value / range) * h * 0.42);
+        const y = point.value >= 0 ? zeroY - barH : zeroY;
+        ctx.fillStyle = point.value >= 0 ? 'rgba(0, 230, 118, 0.7)' : 'rgba(255, 23, 68, 0.7)';
+        ctx.fillRect(point.x - barWidth / 2, y, barWidth, Math.max(1, barH));
+    });
+
+    // Axis labels
+    const axisLabels = [
+        { y: 4, text: '+' + formatCvd(maxAbs) },
+        { y: zeroY, text: '0' },
+        { y: h - 4, text: '-' + formatCvd(maxAbs) }
+    ];
+    drawSubchartAxisRight(ctx, w, h, axisLabels, 'DELTA', rightMargin);
+}
+
+// ─── Volatility Subchart ─────────────────────────────────────────────────
+
+function renderSubchartVol(pane, ctx, w, h, data, settings, xOffset = 0) {
+    const leftMargin = 0;
+    const rightMargin = 74;
+    const chartW = w - leftMargin - rightMargin;
+    const topMargin = 4;
+
+    drawSubchartBackground(ctx, w, h);
+    drawSubchartGrid(ctx, w, h, 3, leftMargin, rightMargin);
+
+    if (!data || !data.hvPct || data.hvPct.length < 2) return;
+
+    const timeScale = pane.chart.timeScale();
+
+    function buildVisible(arr) {
+        const result = [];
+        for (let i = 0; i < arr.length; i++) {
+            const d = arr[i];
+            if (d.value === undefined || d.value === null) continue;
+            const x = timeScale.timeToCoordinate(d.time);
+            if (x === null) continue;
+            result.push({ x: x + xOffset, value: d.value });
+        }
+        // Fallback: linear interpolation
+        if (result.length < 2 && arr.length >= 2) {
+            const ts = arr.map(a => a.time).filter(t => t !== undefined);
+            if (ts.length >= 2 && ts[ts.length-1] > ts[0]) {
+                const chartW_ = w - 0 - 74;
+                const span = ts[ts.length-1] - ts[0];
+                for (let j = 0; j < arr.length; j++) {
+                    const a = arr[j];
+                    if (a.value === undefined || a.value === null) continue;
+                    const x = ((a.time - ts[0]) / span) * chartW_;
+                    result.push({ x, value: a.value });
+                }
+            }
+        }
+        return result;
+    }
+    const visHv = buildVisible(data.hvPct);
+    const visAtr = buildVisible(data.atrPct || []);
+    if (visHv.length < 2) return;
+
+    const minVal = 0, maxVal = 100;
+
+    // Reference lines (25, 75, 90)
+    const refLines = [
+        { value: 90, color: 'rgba(255, 82, 82, 0.2)' },
+        { value: 75, color: 'rgba(255, 152, 0, 0.2)' },
+        { value: 25, color: 'rgba(76, 175, 80, 0.2)' }
+    ];
+    refLines.forEach(ref => {
+        const y = getSubchartValueY(ref.value, minVal, maxVal, h, topMargin);
+        ctx.strokeStyle = ref.color;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(leftMargin, y);
+        ctx.lineTo(leftMargin + chartW, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    });
+
+    // HV%ile line
+    ctx.strokeStyle = '#00bcd4';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    visHv.forEach((point, i) => {
+        const y = getSubchartValueY(point.value, minVal, maxVal, h, topMargin);
+        if (i === 0) ctx.moveTo(point.x, y);
+        else ctx.lineTo(point.x, y);
+    });
+    ctx.stroke();
+
+    // ATR%ile line
+    if (visAtr.length >= 2) {
+        ctx.strokeStyle = '#ff9800';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        visAtr.forEach((point, i) => {
+            const y = getSubchartValueY(point.value, minVal, maxVal, h, topMargin);
+            if (i === 0) ctx.moveTo(point.x, y);
+            else ctx.lineTo(point.x, y);
+        });
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    // Axis labels
+    const axisLabels = [
+        { y: getSubchartValueY(90, minVal, maxVal, h, topMargin), text: 'Extr' },
+        { y: getSubchartValueY(75, minVal, maxVal, h, topMargin), text: 'Hi' },
+        { y: getSubchartValueY(25, minVal, maxVal, h, topMargin), text: 'Low' }
+    ];
+    drawSubchartAxisRight(ctx, w, h, axisLabels, 'VOLATILITY', rightMargin);
 }
 
 function drawVolumeProfile(pane) {
@@ -3390,8 +3831,8 @@ function drawVolumeProfile(pane) {
         : pane.historyData;
 
     const settings = pane.indicators.settings || {};
-    renderSubchartBorders(pane);
 
+    // Day-start lines on the main chart decoration overlay (still useful)
     const dayStartTimes = getDayStartTimes(pane, pane.historyData || []);
     decorationOverlay.dataset.dayStarts = String(dayStartTimes.length);
     dayStartTimes.forEach(time => {
@@ -3404,6 +3845,7 @@ function drawVolumeProfile(pane) {
     });
     decorationOverlay.dataset.overlayChildren = String(decorationOverlay.children.length);
 
+    // Volume Profile drawn on right panel canvas
     if (!pane.indicators.volumeProfile || !profileData || profileData.length === 0) {
         return;
     }
@@ -3413,49 +3855,39 @@ function drawVolumeProfile(pane) {
     decorationOverlay.dataset.sessionBars = String(sessionGroups.length);
     if (sessionGroups.length === 0) return;
 
-    const chartWidth = canvas.width;
-    const profileRightInset = Math.max(56, Math.round(chartWidth * 0.045));
+    const vpW = canvas.width;
+    const vpH = canvas.height;
 
-    // Right edge of chart content area (left of price scale)
-    const rightScaleW  = (pane.chart.priceScale('right').width && pane.chart.priceScale('right').width()) || 65;
-    const vpRightEdge  = chartWidth - rightScaleW;
+    // Background
+    ctx.fillStyle = 'rgba(10, 12, 20, 0.85)';
+    ctx.fillRect(0, 0, vpW, vpH);
 
-    // Bar width for whitespace estimation (rightOffset bars worth of space)
-    const VP_RIGHT_OFFSET_BARS = 8; // matches chart timeScale rightOffset
-    let _barW = 20;
-    if (profileData && profileData.length >= 2) {
-        const _li = profileData.length - 1;
-        const _x1 = pane.chart.timeScale().timeToCoordinate(profileData[_li - 1].time);
-        const _x2 = pane.chart.timeScale().timeToCoordinate(profileData[_li].time);
-        if (_x1 !== null && _x2 !== null) _barW = Math.max(4, Math.abs(_x2 - _x1));
-    }
-    const vpWhitespacePx = VP_RIGHT_OFFSET_BARS * _barW;
+    // Title
+    ctx.font = 'bold 9px "Space Grotesk", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = 'rgba(174, 186, 204, 0.7)';
+    ctx.fillText('VOL PROFILE', vpW / 2, 2);
 
-    const drawMarkerLine = (label, price, color, dashed = true, leftPx = 0, rightPx = profileRightInset) => {
+    // Mark POC / VAH / VAL labels
+    const drawMarkerLine = (label, price, color, dashed) => {
         const y = pane.candleSeries.priceToCoordinate(price);
         if (y === null) return;
-
-        const line = document.createElement("div");
-        line.className = "vp-marker-line";
         if (dashed) {
-            line.classList.add("vp-marker-line-dashed");
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 3]);
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(vpW, y);
+            ctx.stroke();
+            ctx.setLineDash([]);
         }
-        line.style.top = `${y}px`;
-        line.style.left = `${Math.max(0, leftPx)}px`;
-        line.style.right = `${Math.max(0, rightPx)}px`;
-        line.style.color = color;
-        line.style.backgroundColor = color;
-        decorationOverlay.appendChild(line);
-
-        if (label) {
-            const text = document.createElement("div");
-            text.className = "vp-marker-label";
-            text.textContent = label;
-            text.style.top = `${Math.max(0, y - 12)}px`;
-            text.style.color = color;
-            text.style.left = `${Math.max(10, leftPx + 8)}px`;
-            decorationOverlay.appendChild(text);
-        }
+        ctx.fillStyle = color;
+        ctx.font = '8px "Space Grotesk", monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(label, 2, Math.max(14, y - 2));
     };
 
     let oldestVisibleSessionPoc = null;
@@ -3464,101 +3896,237 @@ function drawVolumeProfile(pane) {
         const model = buildVolumeProfileModelForBars(group.bars, settings);
         if (!model || model.maxVol <= 0) return;
 
-        const startX = pane.chart.timeScale().timeToCoordinate(group.startTime);
-        const endX   = pane.chart.timeScale().timeToCoordinate(group.endTime);
-        // Current session anchor = right edge (no startX needed); historical need both
-        if (endX === null) return;
-        if (!group.isCurrent && startX === null) return;
-
-        const effectiveStartX = startX ?? 0; // off-screen left → draw from edge
-        const spanWidth = Math.max(18, Math.abs(endX - (startX ?? 0)));
-        const vpWidthPct = (settings.vpWidth || 22) / 100;
-
-        // Current session: locked to right content edge, width = whitespace only
-        // Historical sessions: anchored at session start, proportional width
-        const anchorX = group.isCurrent
-            ? vpRightEdge
-            : Math.max(0, effectiveStartX + 6);
-        const maxProfileWidth = group.isCurrent
-            ? Math.max(12, Math.min(vpWhitespacePx - 4, chartWidth * vpWidthPct))
-            : Math.max(12, Math.min(spanWidth * 0.42, chartWidth * vpWidthPct));
-
-        const hideHistogramForOldest = sessionGroups.length > 1 && groupIndex === 0 && !group.isCurrent;
-
-        if (!hideHistogramForOldest) {
-            model.bins.forEach((vol, idx) => {
-                if (vol === 0) return;
-
-                const binMinPrice = model.minPrice + idx * model.binSize;
-                const binMaxPrice = binMinPrice + model.binSize;
-                const yTop = pane.candleSeries.priceToCoordinate(binMaxPrice);
-                const yBottom = pane.candleSeries.priceToCoordinate(binMinPrice);
-                if (yTop === null || yBottom === null) return;
-
-                const barHeight = Math.abs(yBottom - yTop);
-                const barWidth  = (vol / model.maxVol) * maxProfileWidth;
-                const left = group.isCurrent
-                    ? Math.max(0, anchorX - barWidth)
-                    : anchorX;
-
-                const inValueArea = idx >= model.valueAreaLow && idx <= model.valueAreaHigh;
-                const bar = document.createElement("div");
-                bar.className = "vp-bar";
-                if (idx === model.pocBinIndex) {
-                    bar.classList.add("vp-bar-poc");
-                } else if (inValueArea) {
-                    bar.classList.add("vp-bar-value-area");
-                }
-                bar.style.left   = `${left}px`;
-                bar.style.top    = `${yTop}px`;
-                bar.style.width  = `${Math.max(1, barWidth)}px`;
-                bar.style.height = `${Math.max(1, barHeight - 1)}px`;
-                decorationOverlay.appendChild(bar);
-            });
+        const visibleRange = pane.chart ? pane.chart.timeScale().getVisibleRange() : null;
+        if (visibleRange && visibleRange.from && visibleRange.to) {
+            if (group.endTime < visibleRange.from || group.startTime > visibleRange.to) return;
         }
 
-        if (group.isCurrent) {
-            const pocPrice = model.minPrice + model.pocBinIndex * model.binSize + model.binSize / 2;
-            const vahPrice = model.minPrice + (model.valueAreaHigh + 1) * model.binSize;
-            const valPrice = model.minPrice + model.valueAreaLow * model.binSize;
-            // rightPx = rightScaleW pins line to vpRightEdge; effectiveStartX = 0 if session start off-screen
-            drawMarkerLine('', pocPrice, '#ffd60a', false, effectiveStartX, rightScaleW);
-            drawMarkerLine('', vahPrice, '#ffd60a', true,  effectiveStartX, rightScaleW);
-            drawMarkerLine('', valPrice, '#ffd60a', true,  effectiveStartX, rightScaleW);
-        }
+        // Draw VP horizontal bars on the right panel
+        const barMargin = 2;
+        const barWidth = vpW - barMargin * 2;
+        if (barWidth <= 0) return;
 
-        if (!oldestVisibleSessionPoc) {
-            oldestVisibleSessionPoc = {
-                startTime: group.startTime,
-                endTime: group.endTime,
-                pocPrice: model.minPrice + model.pocBinIndex * model.binSize + model.binSize / 2
-            };
+        const binHeight = Math.max(1, (vpH - 20) / model.bins.length);
+        const maxVol = model.maxVol || 1;
+
+        model.bins.forEach((vol, idx) => {
+            if (vol <= 0) return;
+            const price = model.minPrice + (idx + 0.5) * model.binSize;
+            const y = pane.candleSeries.priceToCoordinate(price);
+            if (y === null) return;
+
+            const barLen = Math.max(2, (vol / maxVol) * barWidth);
+            const barColor = (idx === model.pocBinIndex)
+                ? 'rgba(255, 214, 10, 0.5)'
+                : (idx >= model.valueAreaLow && idx <= model.valueAreaHigh)
+                    ? 'rgba(112, 111, 211, 0.4)'
+                    : 'rgba(112, 111, 211, 0.2)';
+
+            ctx.fillStyle = barColor;
+            ctx.fillRect(vpW - barMargin - barLen, y - binHeight / 2, barLen, Math.max(1, binHeight));
+        });
+
+        // POC marker line across the whole panel
+        if (model.bins[model.pocBinIndex] > 0) {
+            const pocPrice = model.minPrice + (model.pocBinIndex + 0.5) * model.binSize;
+            if (group.isCurrent) {
+                drawMarkerLine('POC', pocPrice, 'rgba(255, 214, 10, 0.8)', true);
+            } else {
+                oldestVisibleSessionPoc = { price: pocPrice, groupIndex };
+            }
         }
     });
 
+    // Draw oldest session POC if multiple sessions visible
     if (oldestVisibleSessionPoc && sessionGroups.length > 1) {
-        const laterGroups = sessionGroups.filter(group => group.startTime > oldestVisibleSessionPoc.endTime);
-        let interceptTime = null;
-
-        for (const group of laterGroups) {
-            const touched = group.bars.find(bar => bar.low <= oldestVisibleSessionPoc.pocPrice && bar.high >= oldestVisibleSessionPoc.pocPrice);
-            if (touched) {
-                interceptTime = touched.time;
-                break;
-            }
-        }
-
-        if (interceptTime === null) {
-            const pocLineStartX = pane.chart.timeScale().timeToCoordinate(oldestVisibleSessionPoc.endTime) ?? 0;
-            const endTime  = sessionGroups[sessionGroups.length - 1].endTime;
-            const pocLineEndX = pane.chart.timeScale().timeToCoordinate(endTime);
-
-            if (pocLineEndX !== null && Number.isFinite(pocLineStartX) && Number.isFinite(pocLineEndX) && pocLineEndX > pocLineStartX) {
-                drawMarkerLine('', oldestVisibleSessionPoc.pocPrice, 'rgba(255, 214, 10, 0.72)', false, pocLineStartX, rightScaleW);
-            }
-        }
+        drawMarkerLine('POC', oldestVisibleSessionPoc.price, 'rgba(255, 214, 10, 0.5)', true);
     }
-    decorationOverlay.dataset.overlayChildren = String(decorationOverlay.children.length);
+}
+
+// ─── Delta Profile (left panel) ──────────────────────────────────────────
+
+function drawDeltaProfile(pane) {
+    const canvas = pane.dom.deltaCanvas;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    if (!pane.indicators.deltaProfile || !pane.historyData || pane.historyData.length < 2) {
+        return;
+    }
+
+    // Background
+    ctx.fillStyle = 'rgba(10, 12, 20, 0.85)';
+    ctx.fillRect(0, 0, w, h);
+
+    // Title
+    ctx.font = 'bold 9px "Space Grotesk", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = 'rgba(174, 186, 204, 0.7)';
+    ctx.fillText('DELTA', w / 2, 2);
+
+    // Get visible bars from the main chart
+    const visibleRange = pane.chart ? pane.chart.timeScale().getVisibleRange() : null;
+    if (!visibleRange || !visibleRange.from || !visibleRange.to) return;
+
+    const visibleBars = pane.historyData.filter(d =>
+        d.time >= visibleRange.from && d.time <= visibleRange.to
+    );
+    if (visibleBars.length < 2) return;
+
+    // Compute per-bar delta
+    let minPrice = Infinity, maxPrice = -Infinity;
+    const priceDeltas = new Map();
+    visibleBars.forEach(bar => {
+        minPrice = Math.min(minPrice, bar.low);
+        maxPrice = Math.max(maxPrice, bar.high);
+        // Simple delta estimate
+        const dir = bar.close - bar.open;
+        const delta = dir * (bar.volume || 0) * 0.01;
+        if (!priceDeltas.has(bar.low)) priceDeltas.set(bar.low, 0);
+        if (!priceDeltas.has(bar.high)) priceDeltas.set(bar.high, 0);
+        priceDeltas.set(bar.low, (priceDeltas.get(bar.low) || 0) + delta);
+        priceDeltas.set(bar.high, (priceDeltas.get(bar.high) || 0) + delta);
+    });
+
+    if (minPrice === maxPrice) return;
+    const priceRange = maxPrice - minPrice;
+
+    // Find max absolute delta for scaling
+    let maxAbsDelta = 1;
+    priceDeltas.forEach(delta => { maxAbsDelta = Math.max(maxAbsDelta, Math.abs(delta)); });
+
+    // Draw delta bars per price level
+    const numBins = Math.min(40, Math.max(10, Math.floor(h / 4)));
+    const binSize = priceRange / numBins;
+    const binDeltas = new Float64Array(numBins);
+    const binCounts = new Uint16Array(numBins);
+
+    visibleBars.forEach(bar => {
+        const delta = (bar.close - bar.open) * (bar.volume || 0) * 0.01;
+        const barMid = (bar.high + bar.low) / 2;
+        const binIdx = Math.max(0, Math.min(numBins - 1, Math.floor((barMid - minPrice) / binSize)));
+        binDeltas[binIdx] += delta;
+        binCounts[binIdx]++;
+    });
+
+    const barW = w - 4;
+    const maxBar = Math.max(1, ...binDeltas.map(d => Math.abs(d)));
+
+    for (let i = 0; i < numBins; i++) {
+        if (binCounts[i] === 0) continue;
+        const price = minPrice + (i + 0.5) * binSize;
+        const y = pane.candleSeries.priceToCoordinate(price);
+        if (y === null) continue;
+
+        const deltaVal = binDeltas[i];
+        const barLen = Math.max(1, Math.abs(deltaVal) / maxBar * barW);
+        const xStart = deltaVal >= 0 ? w - 2 - barLen : w - 2;
+        ctx.fillStyle = deltaVal >= 0 ? 'rgba(0, 230, 118, 0.6)' : 'rgba(255, 23, 68, 0.6)';
+        ctx.fillRect(xStart, y - 1, barLen, Math.max(2, h / numBins));
+    }
+}
+
+// ─── Time Axis (bottom of pane) ─────────────────────────────────────────
+
+function renderTimeAxis(pane) {
+    const canvas = pane.dom.timeCanvas;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    if (!pane.chart) return;
+
+    const timeScale = pane.chart.timeScale();
+    const rightMargin = 74;
+
+    // Compute X offset for alignment with candle chart
+    const contRect = pane.dom.container.getBoundingClientRect();
+    const canRect = canvas.getBoundingClientRect();
+    const xOffset = contRect.left - canRect.left;
+
+    // Background
+    ctx.fillStyle = '#151a24';
+    ctx.fillRect(0, 0, w, h);
+
+    // Separator on right to match subchart axis
+    ctx.fillStyle = 'rgba(11, 14, 20, 0.95)';
+    ctx.fillRect(w - rightMargin, 0, rightMargin, h);
+
+    // Get visible range from main chart's time scale
+    const vr = timeScale.getVisibleRange();
+    if (!vr || !vr.from || !vr.to) return;
+    const span = vr.to - vr.from;
+    if (span <= 0) return;
+
+    // Determine tick interval based on visible span
+    let tickInterval, labelFormat;
+    if (span < 1800) {
+        tickInterval = 300;
+        labelFormat = 'time';
+    } else if (span < 7200) {
+        tickInterval = 900;
+        labelFormat = 'time';
+    } else if (span < 21600) {
+        tickInterval = 1800;
+        labelFormat = 'time';
+    } else if (span < 86400) {
+        tickInterval = 3600;
+        labelFormat = 'time';
+    } else if (span < 604800) {
+        tickInterval = 14400;
+        labelFormat = 'daytime';
+    } else if (span < 2592000) {
+        tickInterval = 86400;
+        labelFormat = 'date';
+    } else {
+        tickInterval = 604800;
+        labelFormat = 'date';
+    }
+
+    const firstTick = Math.ceil(vr.from / tickInterval) * tickInterval;
+    ctx.font = '10px "Space Grotesk", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (let t = firstTick; t <= vr.to; t += tickInterval) {
+        const x = timeScale.timeToCoordinate(t);
+        if (x === null) continue;
+        const drawX = x + xOffset;
+        if (drawX < 0 || drawX > w - rightMargin) continue;
+
+        ctx.strokeStyle = 'rgba(42, 51, 71, 0.6)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(drawX, 0);
+        ctx.lineTo(drawX, h);
+        ctx.stroke();
+
+        const d = new Date(t * 1000);
+        let label;
+        if (labelFormat === 'time') {
+            label = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+        } else if (labelFormat === 'daytime') {
+            label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' +
+                    d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+        } else {
+            label = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        }
+        ctx.fillStyle = '#8e9aaf';
+        ctx.fillText(label, drawX, h / 2);
+    }
+
+    ctx.strokeStyle = 'rgba(42, 51, 71, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(w - rightMargin, 0);
+    ctx.lineTo(w - rightMargin, h);
+    ctx.stroke();
 }
 
 // --- INDICATOR UI AND DATA BINDINGS ---
@@ -3605,53 +4173,35 @@ function applyIndicators(pane) {
         pane.bbLowerSeries.setData(bb.lower);
     }
     
-    // 3. Oscillators Toggle Visibility
-    pane.cvdSeries.applyOptions({ visible: false });
-    pane.vwrsiSeries.applyOptions({ visible: !!inds.vwrsi });
-    pane.vwMacdLineSeries.applyOptions({ visible: !!inds.vwmacd });
-    pane.vwMacdSignalSeries.applyOptions({ visible: !!inds.vwmacd });
-    pane.vwMacdHistSeries.applyOptions({ visible: !!inds.vwmacd });
-    pane.atrSeries.applyOptions({ visible: false });
-    pane.volHvSeries.applyOptions({ visible: !!inds.vol });
-    pane.volAtrSeries.applyOptions({ visible: !!inds.vol });
-
-    // Recalculate margins
+    // 3. Toggle Volume Profile right panel
+    if (pane.dom.vpRight) {
+        pane.dom.vpRight.classList.toggle('active', !!inds.volumeProfile);
+    }
+    // Toggle Delta Profile left panel
+    if (pane.dom.ofPanel) {
+        pane.dom.ofPanel.classList.toggle('active', !!inds.deltaProfile);
+    }
+    
+    // Recalculate margins (simple — no oscillators in main chart)
     updatePriceScaleMargins(pane);
 
-    // 4. Fill oscillator series data
-    if (inds.vwrsi) {
-        pane.vwrsiSeries.setData(calculateVWRSI(pane.historyData, settings.vwrsiPeriod || 14));
-    }
-    if (inds.vwmacd) {
-        const vwmacdVal = calculateVWMACD(pane.historyData, settings.vwmacdFast || 12, settings.vwmacdSlow || 26, settings.vwmacdSignal || 9);
-        pane.vwMacdLineSeries.setData(vwmacdVal.macd);
-        pane.vwMacdSignalSeries.setData(vwmacdVal.signal);
-        pane.vwMacdHistSeries.setData(vwmacdVal.histogram);
-    }
+    // 4. Render subchart oscillator panels (creates/removes canvas panels)
+    renderAllSubcharts(pane);
+    
+    // 5. Volatility last values for toolbar (cache)
     if (inds.vol) {
         const hvWindow  = settings.hvWindow  || 20;
         const rankWindow = settings.volRankWindow || 252;
         const hv        = calculateHV(pane.historyData, hvWindow);
         const atrPct    = calculateAtrPct(pane.historyData, settings.atrPeriod || 14);
         const hvPct     = calculateRollingPercentile(hv, rankWindow);
-        const atrPct2   = calculateRollingPercentile(atrPct, rankWindow);
-        pane.volHvSeries.setData(hvPct.filter(d => d.value !== null));
-        pane.volAtrSeries.setData(atrPct2.filter(d => d.value !== null));
-        // Cache last values for toolbar display
         const lastHv  = hv.filter(d => d.value !== null).slice(-1)[0];
         const lastPct = hvPct.filter(d => d.value !== null).slice(-1)[0];
         pane._volLastHv  = lastHv  ? lastHv.value  : null;
         pane._volLastPct = lastPct ? lastPct.value : null;
-        // Add reference lines if not already present
-        if (!pane._volPriceLines) {
-            pane._volPriceLines = [
-                pane.volHvSeries.createPriceLine({ price: 90, color: 'rgba(255, 82, 82, 0.5)',  lineWidth: 1, lineStyle: 2, axisLabelVisible: false }),
-                pane.volHvSeries.createPriceLine({ price: 75, color: 'rgba(255, 152, 0, 0.5)',  lineWidth: 1, lineStyle: 2, axisLabelVisible: false }),
-                pane.volHvSeries.createPriceLine({ price: 25, color: 'rgba(76, 175, 80, 0.5)',  lineWidth: 1, lineStyle: 2, axisLabelVisible: false }),
-            ];
-        }
     }
-    // Divergence detection (run after indicators are computed)
+    
+    // 6. Divergence detection (run after indicators are computed)
     if (inds.divergence && (inds.vwrsi || inds.vwmacd)) {
         const allMarkers = [];
 
@@ -3685,10 +4235,11 @@ function applyIndicators(pane) {
     // Update metric label displaying in the top bar
     updateMetricLabels(pane);
     
-    // Trigger Volume Profile overlay drawing
+    // Trigger Volume Profile drawing on right panel
     requestVolumeProfileDraw(pane);
+    renderTimeAxis(pane);
 
-    // 5. Regime Detector — init or sync
+    // 7. Regime Detector —
     if (inds.regime) {
         initRegimeForPane(pane);
     } else {
@@ -3741,18 +4292,8 @@ function updateIndicatorsRealtime(pane, forceFullRecalc = false) {
     }
     
     if (shouldRecalculate) {
-        if (inds.vwrsi) {
-            const vwrsiVal = calculateVWRSI(pane.historyData, settings.vwrsiPeriod || 14);
-            if (vwrsiVal.length > 0) safeSeriesUpdate(pane, pane.vwrsiSeries, vwrsiVal[vwrsiVal.length - 1], "vwrsiSeries");
-        }
-        if (inds.vwmacd) {
-            const vwmacdVal = calculateVWMACD(pane.historyData, settings.vwmacdFast || 12, settings.vwmacdSlow || 26, settings.vwmacdSignal || 9);
-            if (vwmacdVal.macd.length > 0) {
-                safeSeriesUpdate(pane, pane.vwMacdLineSeries, vwmacdVal.macd[vwmacdVal.macd.length - 1], "vwMacdLineSeries");
-                safeSeriesUpdate(pane, pane.vwMacdSignalSeries, vwmacdVal.signal[vwmacdVal.signal.length - 1], "vwMacdSignalSeries");
-                safeSeriesUpdate(pane, pane.vwMacdHistSeries, vwmacdVal.histogram[vwmacdVal.histogram.length - 1], "vwMacdHistSeries");
-            }
-        }
+        // Subcharts are re-rendered from full data — just trigger redraw
+        renderAllSubcharts(pane);
         pane.lastIndicatorRealtimeAt = currentTickSec;
         pane.lastIndicatorUpdateTime = lastBarTime;
     }
@@ -3765,8 +4306,8 @@ function updateIndicatorsRealtime(pane, forceFullRecalc = false) {
 function updateIndicatorBtnState(pane) {
     const inds = pane.indicators;
     const isCustomActive = inds.ema10 || inds.ema20 || inds.ema50 || inds.ema100 || inds.ema200 ||
-                          inds.bbands || inds.volumeProfile || inds.vwrsi || inds.vwmacd ||
-                          inds.atr || inds.divergence || inds.regime || inds.vwap || inds.vol;
+                          inds.bbands || inds.volumeProfile || inds.vwrsi || inds.vwmacd || inds.bvd ||
+                          inds.atr || inds.divergence || inds.regime || inds.vwap || inds.vol || inds.deltaProfile;
     const btn = document.getElementById(`${pane.id}-ind-btn`);
     if (btn) {
         if (isCustomActive) {
