@@ -796,19 +796,12 @@ select:hover, input:focus {
     height: 100%;
 }
 
-/* Right Volume Profile panel */
-.vp-right-panel {
+/* Right Volume Profile panel — DISABLED, VP now uses main chart overlay */
+.vp-right-panel,
+.vp-right-panel.active {
     flex: 0 0 0px;
     width: 0;
     overflow: hidden;
-    background: rgba(10, 12, 20, 0.85);
-    border-left: 1px solid rgba(42, 51, 71, 0.45);
-    position: relative;
-    transition: flex 0.2s ease, width 0.2s ease;
-}
-.vp-right-panel.active {
-    flex: 0 0 150px;
-    width: 150px;
 }
 .vp-right-panel .vp-canvas {
     position: absolute;
@@ -858,6 +851,49 @@ select:hover, input:focus {
     transform: translateY(-50%);
     pointer-events: none;
 }
+
+/* Current session VP overlay on main chart (anchored to right edge) */
+.current-session-block {
+    position: absolute;
+    pointer-events: none;
+    opacity: 0.55;
+}
+.curr-vp-bar {
+    position: absolute;
+    background: rgba(112, 111, 211, 0.35);
+}
+.curr-vp-bar.va {
+    background: rgba(112, 111, 211, 0.55);
+}
+.curr-vp-bar.poc {
+    background: rgba(255, 214, 10, 0.65);
+}
+.curr-marker-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 1px;
+    border-top: 1px dashed rgba(150, 160, 175, 0.3);
+    pointer-events: none;
+}
+.curr-marker-line.curr-marker-poc { border-top-color: rgba(255, 214, 10, 0.45); }
+.curr-marker-line.curr-marker-vah { border-top-color: rgba(112, 111, 211, 0.5); }
+.curr-marker-line.curr-marker-val { border-top-color: rgba(112, 111, 211, 0.5); }
+.curr-marker-text {
+    position: absolute;
+    left: 10px;
+    font: 9px 'Space Grotesk', monospace;
+    color: rgba(150, 160, 175, 0.9);
+    background: rgba(0, 0, 0, 0.65);
+    padding: 2px 5px;
+    border-radius: 2px;
+    white-space: nowrap;
+    transform: translateY(-50%);
+    pointer-events: none;
+}
+.curr-marker-text.curr-marker-poc { color: rgba(255, 214, 10, 0.95); }
+.curr-marker-text.curr-marker-vah { color: rgba(112, 111, 211, 0.9); }
+.curr-marker-text.curr-marker-val { color: rgba(112, 111, 211, 0.9); }
 
 /* Center column: main chart + pane-loading stacked vertically */
 .chart-column {

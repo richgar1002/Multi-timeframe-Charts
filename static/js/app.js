@@ -1663,8 +1663,7 @@ function initLightweightChart(pane) {
         },
         rightPriceScale: {
             borderColor: '#2a3347',
-            autoScale: true,
-            visible: false   // Hide built-in price labels — VP canvas draws its own axis on the far right
+            autoScale: true
         },
         handleScale: {
             axisPressedMouseMove: {
@@ -3824,11 +3823,8 @@ function renderSubchartVol(pane, ctx, w, h, data, settings, xOffset = 0) {
 }
 
 function drawVolumeProfile(pane) {
-    const canvas = pane.volumeProfileCanvas;
     const decorationOverlay = pane.decorationOverlay;
-    if (!canvas || !decorationOverlay) return;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!decorationOverlay) return;
     decorationOverlay.innerHTML = "";
     decorationOverlay.dataset.dayStarts = "0";
     decorationOverlay.dataset.profileBars = "0";
@@ -3865,7 +3861,7 @@ function drawVolumeProfile(pane) {
     const currentGroup  = sessionGroups.find(g => g.isCurrent);
     const previousGroups = sessionGroups.filter(g => !g.isCurrent);
 
-    // ── ALL previous session profiles → faded overlay on main chart at each day's start ──
+    // ── ALL previous session profiles → faded overlay on main chart ──
     previousGroups.forEach(prevGroup => {
         if (!prevGroup || prevGroup.bars.length === 0) return;
         const prevModel = buildVolumeProfileModelForBars(prevGroup.bars, settings);
@@ -3943,149 +3939,68 @@ function drawVolumeProfile(pane) {
         }
     });
 
-    // ── Current session VP → right panel canvas ──
+    // ── Current session VP → overlay on main chart (anchored to right edge) ──
     if (!currentGroup || currentGroup.bars.length === 0) return;
 
     const model = buildVolumeProfileModelForBars(currentGroup.bars, settings);
     if (!model || model.maxVol <= 0) return;
 
-    const vpW = canvas.width;
-    const vpH = canvas.height;
+    // Anchor at the right edge of the chart (before the price scale)
+    const chartWidth = pane.dom.container.clientWidth;
+    const barMaxW = 80; // Width of the VP overlay
 
-    // Layout: histogram area (left) + price axis strip (right)
-    const axisWidth   = 62;
-    const histRight   = vpW - axisWidth;
-    const histMargin  = 3;
-    const histUsable  = histRight - histMargin;
+    const block = document.createElement("div");
+    block.className = "current-session-block";
+    block.style.right  = "0px";
+    block.style.top    = "0";
+    block.style.width  = `${barMaxW}px`;
+    block.style.height = `${pane.dom.container.clientHeight}px`;
 
-    // Full background
-    ctx.fillStyle = 'rgba(10, 12, 20, 0.92)';
-    ctx.fillRect(0, 0, vpW, vpH);
-
-    // Background for axis strip (slightly different tone)
-    ctx.fillStyle = 'rgba(12, 15, 22, 0.98)';
-    ctx.fillRect(histRight, 0, axisWidth, vpH);
-
-    // Separator between histogram and price axis
-    ctx.strokeStyle = 'rgba(42, 51, 71, 0.45)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(histRight, 0);
-    ctx.lineTo(histRight, vpH);
-    ctx.stroke();
-
-    // Title
-    ctx.font = 'bold 9px "Space Grotesk", monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillStyle = 'rgba(174, 186, 204, 0.6)';
-    ctx.fillText('SESSION VP', histRight / 2, 3);
-    ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(174, 186, 204, 0.6)';
-    ctx.fillText('PRICE', histRight + axisWidth / 2, 3);
-
-    // ── Histogram bars with proper bin height from priceToCoordinate ──
     model.bins.forEach((vol, idx) => {
         if (vol <= 0) return;
-
         const priceTop = model.minPrice + (idx + 1) * model.binSize;
         const priceBot = model.minPrice + idx * model.binSize;
         const yTop = pane.candleSeries.priceToCoordinate(priceTop);
         const yBot = pane.candleSeries.priceToCoordinate(priceBot);
         if (yTop === null || yBot === null) return;
 
-        const barH = Math.abs(yBot - yTop);
-        const barY = Math.min(yTop, yBot);
-        const barLen = Math.max(2, (vol / model.maxVol) * histUsable);
+        const barH   = Math.abs(yBot - yTop);
+        const barLen = Math.max(2, (vol / model.maxVol) * barMaxW);
+        const isPoc  = idx === model.pocBinIndex;
+        const isVA   = idx >= model.valueAreaLow && idx <= model.valueAreaHigh;
 
-        const isPoc = idx === model.pocBinIndex;
-        const isVA  = idx >= model.valueAreaLow && idx <= model.valueAreaHigh;
-
-        if (isPoc) {
-            ctx.fillStyle = 'rgba(255, 214, 10, 0.55)';
-        } else if (isVA) {
-            ctx.fillStyle = 'rgba(112, 111, 211, 0.48)';
-        } else {
-            ctx.fillStyle = 'rgba(112, 111, 211, 0.22)';
-        }
-
-        // Bars grow right → left (anchored at price axis, extending toward chart/price action)
-        ctx.fillRect(histRight - barLen, barY, barLen, Math.max(1, barH));
+        const bar = document.createElement("div");
+        bar.className = "curr-vp-bar" + (isPoc ? " poc" : (isVA ? " va" : ""));
+        bar.style.top    = `${Math.min(yTop, yBot)}px`;
+        bar.style.right  = "0px";
+        bar.style.width  = `${barLen}px`;
+        bar.style.height = `${Math.max(1, barH - 1)}px`;
+        block.appendChild(bar);
     });
 
-    // ── Key levels: POC, VAH, VAL ──
+    decorationOverlay.appendChild(block);
+
+    // POC / VAH / VAL marker lines for current session
     const pocPrice = model.minPrice + (model.pocBinIndex  + 0.5) * model.binSize;
     const vahPrice = model.minPrice + (model.valueAreaHigh + 0.5) * model.binSize;
     const valPrice = model.minPrice + (model.valueAreaLow  + 0.5) * model.binSize;
 
-    const drawKeyLine = (price, label, color, lw = 1) => {
+    [[pocPrice, 'POC', 'curr-marker-poc'],
+     [vahPrice, 'VAH', 'curr-marker-vah'],
+     [valPrice, 'VAL', 'curr-marker-val']].forEach(([price, label, cls]) => {
         const y = pane.candleSeries.priceToCoordinate(price);
         if (y === null) return;
+        const line = document.createElement("div");
+        line.className = `curr-marker-line ${cls}`;
+        line.style.top = `${y}px`;
+        decorationOverlay.appendChild(line);
 
-        // Dashed line across histogram area
-        ctx.strokeStyle = color;
-        ctx.lineWidth = lw;
-        ctx.setLineDash([4, 3]);
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(histRight, y);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        // Label pill in the price axis area
-        const labelText = `${label} ${formatPrice(price)}`;
-        ctx.font = '9px "Space Grotesk", monospace';
-        const textW = ctx.measureText(labelText).width;
-        ctx.fillStyle = 'rgba(10, 12, 20, 0.95)';
-        ctx.fillRect(histRight + 2, y - 7, textW + 8, 14);
-        ctx.fillStyle = color;
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(labelText, histRight + 5, y);
-    };
-
-    drawKeyLine(pocPrice, 'POC', 'rgba(255, 214, 10, 0.9)', 1.2);
-    drawKeyLine(vahPrice, 'VAH', 'rgba(112, 111, 211, 0.85)', 1);
-    drawKeyLine(valPrice, 'VAL', 'rgba(112, 111, 211, 0.85)', 1);
-
-    // ── Price axis strip: regular tick marks ──
-    const priceRange = model.maxPrice - model.minPrice;
-    const targetTicks = Math.floor(vpH / 40); // Aim for ~40px spacing
-    const rawStep = priceRange / targetTicks;
-    const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
-    const normalized = rawStep / magnitude;
-    let step;
-    if (normalized <= 1.5) step = magnitude;
-    else if (normalized <= 3.5) step = 2 * magnitude;
-    else if (normalized <= 7.5) step = 5 * magnitude;
-    else step = 10 * magnitude;
-
-    // Draw price ticks at regular intervals - brighter and more visible
-    let tickPrice = Math.ceil(model.minPrice / step) * step;
-    while (tickPrice <= model.maxPrice) {
-        const y = pane.candleSeries.priceToCoordinate(tickPrice);
-        if (y !== null && y >= 15 && y <= vpH - 15) {
-            // Tick mark line - bright
-            ctx.strokeStyle = 'rgba(200, 210, 230, 0.6)';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(histRight, y);
-            ctx.lineTo(histRight + 5, y);
-            ctx.stroke();
-
-            // Price label with subtle background for readability
-            const labelText = formatPrice(tickPrice);
-            ctx.font = '8px "Space Grotesk", monospace';
-            const textW = ctx.measureText(labelText).width;
-            ctx.fillStyle = 'rgba(25, 30, 40, 0.85)';
-            ctx.fillRect(histRight + 2, y - 6, textW + 6, 12);
-            ctx.fillStyle = 'rgba(220, 230, 245, 0.95)';  // Bright white-blue
-            ctx.textAlign = 'left';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(labelText, histRight + 5, y);
-        }
-        tickPrice += step;
-    }
+        const txt = document.createElement("div");
+        txt.className = `curr-marker-text ${cls}`;
+        txt.style.top = `${y}px`;
+        txt.textContent = `${label} ${formatPrice(price)}`;
+        decorationOverlay.appendChild(txt);
+    });
 }
 
 // ─── Delta Profile (left panel) ──────────────────────────────────────────
