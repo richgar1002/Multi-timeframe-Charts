@@ -807,14 +807,56 @@ select:hover, input:focus {
     transition: flex 0.2s ease, width 0.2s ease;
 }
 .vp-right-panel.active {
-    flex: 0 0 92px;
-    width: 92px;
+    flex: 0 0 150px;
+    width: 150px;
 }
 .vp-right-panel .vp-canvas {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
+}
+
+/* Previous session VP overlay on main chart */
+.prev-session-block {
+    position: absolute;
+    pointer-events: none;
+    opacity: 0.14;
+}
+.prev-vp-bar {
+    position: absolute;
+    background: rgba(112, 111, 211, 0.35);
+}
+.prev-vp-bar.va {
+    background: rgba(112, 111, 211, 0.55);
+}
+.prev-vp-bar.poc {
+    background: rgba(255, 214, 10, 0.5);
+}
+.prev-vp-label {
+    position: absolute;
+    font: 9px 'Space Grotesk', monospace;
+    color: rgba(255, 214, 10, 0.6);
+    white-space: nowrap;
+}
+.prev-marker-line {
+    position: absolute;
+    left: 0;
+    right: 74px;
+    height: 1px;
+    border-top: 1px dashed;
+    pointer-events: none;
+}
+.prev-marker-poc { color: rgba(255, 214, 10, 0.4); }
+.prev-marker-vah { color: rgba(112, 111, 211, 0.55); }
+.prev-marker-val { color: rgba(112, 111, 211, 0.55); }
+.prev-marker-text {
+    position: absolute;
+    right: 76px;
+    font: 9px 'Space Grotesk', monospace;
+    white-space: nowrap;
+    transform: translateY(-50%);
+    pointer-events: none;
 }
 
 /* Center column: main chart + pane-loading stacked vertically */
