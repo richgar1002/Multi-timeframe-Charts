@@ -307,4 +307,4 @@ if __name__ == "__main__":
         )
 
     # Disable the reloader to avoid duplicate background subscription state in debug sessions.
-    app.run(host="127.0.0.1", port=5002, debug=False, use_reloader=False)
+    app.run(host="0.0.0.0", port=5002, debug=False, use_reloader=False)
