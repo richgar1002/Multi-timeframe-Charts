@@ -3863,72 +3863,84 @@ function drawVolumeProfile(pane) {
     // Separate current vs previous sessions
     const currentGroup  = sessionGroups.find(g => g.isCurrent);
     const previousGroups = sessionGroups.filter(g => !g.isCurrent);
-    const previousGroup  = previousGroups.length > 0 ? previousGroups[previousGroups.length - 1] : null;
 
-    // ── Previous session profile → faded overlay on main chart at current day open ──
-    if (previousGroup && previousGroup.bars.length > 0) {
-        const prevModel = buildVolumeProfileModelForBars(previousGroup.bars, settings);
-        if (prevModel && prevModel.maxVol > 0 && currentGroup) {
-            const anchorX = pane.chart.timeScale().timeToCoordinate(currentGroup.startTime);
-            if (anchorX !== null && Number.isFinite(anchorX)) {
-                const chartW = pane.dom.container.clientWidth;
-                const prevBarMaxW = Math.max(16, Math.min(Math.round(chartW * 0.12), 70));
+    // ── ALL previous session profiles → faded overlay on main chart at each day's start ──
+    previousGroups.forEach(prevGroup => {
+        if (!prevGroup || prevGroup.bars.length === 0) return;
+        const prevModel = buildVolumeProfileModelForBars(prevGroup.bars, settings);
+        if (!prevModel || prevModel.maxVol <= 0) return;
 
-                const block = document.createElement("div");
-                block.className = "prev-session-block";
-                block.style.left   = `${Math.round(anchorX)}px`;
-                block.style.top    = "0";
-                block.style.width  = `${prevBarMaxW}px`;
-                block.style.height = `${pane.dom.container.clientHeight}px`;
+        // Anchor at this session's first bar time
+        const anchorTime = prevGroup.startTime || prevGroup.bars[0].time;
+        const anchorX = pane.chart.timeScale().timeToCoordinate(anchorTime);
+        if (anchorX === null || !Number.isFinite(anchorX)) return;
 
-                prevModel.bins.forEach((vol, idx) => {
-                    if (vol <= 0) return;
-                    const priceTop = prevModel.minPrice + (idx + 1) * prevModel.binSize;
-                    const priceBot = prevModel.minPrice + idx * prevModel.binSize;
-                    const yTop = pane.candleSeries.priceToCoordinate(priceTop);
-                    const yBot = pane.candleSeries.priceToCoordinate(priceBot);
-                    if (yTop === null || yBot === null) return;
-
-                    const barH   = Math.abs(yBot - yTop);
-                    const barLen = Math.max(2, (vol / prevModel.maxVol) * prevBarMaxW);
-                    const isPoc  = idx === prevModel.pocBinIndex;
-                    const isVA   = idx >= prevModel.valueAreaLow && idx <= prevModel.valueAreaHigh;
-
-                    const bar = document.createElement("div");
-                    bar.className = "prev-vp-bar" + (isPoc ? " poc" : (isVA ? " va" : ""));
-                    bar.style.top    = `${Math.min(yTop, yBot)}px`;
-                    bar.style.left   = "0";
-                    bar.style.width  = `${barLen}px`;
-                    bar.style.height = `${Math.max(1, barH - 1)}px`;
-                    block.appendChild(bar);
-                });
-
-                decorationOverlay.appendChild(block);
-
-                // POC / VAH / VAL marker lines across main chart
-                const prevPocPrice = prevModel.minPrice + (prevModel.pocBinIndex + 0.5) * prevModel.binSize;
-                const prevVahPrice = prevModel.minPrice + (prevModel.valueAreaHigh + 0.5) * prevModel.binSize;
-                const prevValPrice = prevModel.minPrice + (prevModel.valueAreaLow  + 0.5) * prevModel.binSize;
-
-                [[prevPocPrice, 'Y POC', 'prev-marker-poc'],
-                 [prevVahPrice, 'Y VAH', 'prev-marker-vah'],
-                 [prevValPrice, 'Y VAL', 'prev-marker-val']].forEach(([price, label, cls]) => {
-                    const y = pane.candleSeries.priceToCoordinate(price);
-                    if (y === null) return;
-                    const line = document.createElement("div");
-                    line.className = `prev-marker-line ${cls}`;
-                    line.style.top = `${y}px`;
-                    decorationOverlay.appendChild(line);
-
-                    const txt = document.createElement("div");
-                    txt.className = `prev-marker-text ${cls}`;
-                    txt.style.top = `${y}px`;
-                    txt.textContent = `${label} ${formatPrice(price)}`;
-                    decorationOverlay.appendChild(txt);
-                });
-            }
+        // Calculate the width of this day's visible candle range
+        const endTime = prevGroup.bars[prevGroup.bars.length - 1].time;
+        const endX = pane.chart.timeScale().timeToCoordinate(endTime);
+        let dayWidth;
+        if (endX !== null && Number.isFinite(endX) && endX > anchorX) {
+            dayWidth = endX - anchorX;
+        } else {
+            dayWidth = Math.max(16, Math.min(Math.round(pane.dom.container.clientWidth * 0.12), 70));
         }
-    }
+        const prevBarMaxW = Math.max(12, Math.min(Math.round(dayWidth), 90));
+
+        const block = document.createElement("div");
+        block.className = "prev-session-block";
+        block.style.left   = `${Math.round(anchorX)}px`;
+        block.style.top    = "0";
+        block.style.width  = `${prevBarMaxW}px`;
+        block.style.height = `${pane.dom.container.clientHeight}px`;
+
+        prevModel.bins.forEach((vol, idx) => {
+            if (vol <= 0) return;
+            const priceTop = prevModel.minPrice + (idx + 1) * prevModel.binSize;
+            const priceBot = prevModel.minPrice + idx * prevModel.binSize;
+            const yTop = pane.candleSeries.priceToCoordinate(priceTop);
+            const yBot = pane.candleSeries.priceToCoordinate(priceBot);
+            if (yTop === null || yBot === null) return;
+
+            const barH   = Math.abs(yBot - yTop);
+            const barLen = Math.max(2, (vol / prevModel.maxVol) * prevBarMaxW);
+            const isPoc  = idx === prevModel.pocBinIndex;
+            const isVA   = idx >= prevModel.valueAreaLow && idx <= prevModel.valueAreaHigh;
+
+            const bar = document.createElement("div");
+            bar.className = "prev-vp-bar" + (isPoc ? " poc" : (isVA ? " va" : ""));
+            bar.style.top    = `${Math.min(yTop, yBot)}px`;
+            bar.style.left   = "0";
+            bar.style.width  = `${barLen}px`;
+            bar.style.height = `${Math.max(1, barH - 1)}px`;
+            block.appendChild(bar);
+        });
+
+        decorationOverlay.appendChild(block);
+
+        // POC / VAH / VAL marker lines for the most recent previous session only
+        if (prevGroup === previousGroups[previousGroups.length - 1]) {
+            const prevPocPrice = prevModel.minPrice + (prevModel.pocBinIndex + 0.5) * prevModel.binSize;
+            const prevVahPrice = prevModel.minPrice + (prevModel.valueAreaHigh + 0.5) * prevModel.binSize;
+            const prevValPrice = prevModel.minPrice + (prevModel.valueAreaLow  + 0.5) * prevModel.binSize;
+
+            [[prevPocPrice, 'Y POC', 'prev-marker-poc'],
+             [prevVahPrice, 'Y VAH', 'prev-marker-vah'],
+             [prevValPrice, 'Y VAL', 'prev-marker-val']].forEach(([price, label, cls]) => {
+                const y = pane.candleSeries.priceToCoordinate(price);
+                if (y === null) return;
+                const line = document.createElement("div");
+                line.className = `prev-marker-line ${cls}`;
+                line.style.top = `${y}px`;
+                decorationOverlay.appendChild(line);
+
+                const txt = document.createElement("div");
+                txt.className = `prev-marker-text ${cls}`;
+                txt.style.top = `${y}px`;
+                txt.textContent = `${label} ${formatPrice(price)}`;
+                decorationOverlay.appendChild(txt);
+            });
+        }
+    });
 
     // ── Current session VP → right panel canvas ──
     if (!currentGroup || currentGroup.bars.length === 0) return;
@@ -3996,8 +4008,8 @@ function drawVolumeProfile(pane) {
             ctx.fillStyle = 'rgba(112, 111, 211, 0.22)';
         }
 
-        // Bars grow left → right within the histogram area
-        ctx.fillRect(histMargin, barY, barLen, Math.max(1, barH));
+        // Bars grow right → left (anchored at price axis, extending toward chart/price action)
+        ctx.fillRect(histRight - barLen, barY, barLen, Math.max(1, barH));
     });
 
     // ── Key levels: POC, VAH, VAL ──

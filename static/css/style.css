@@ -821,17 +821,17 @@ select:hover, input:focus {
 .prev-session-block {
     position: absolute;
     pointer-events: none;
-    opacity: 0.14;
+    opacity: 0.45;
 }
 .prev-vp-bar {
     position: absolute;
-    background: rgba(112, 111, 211, 0.35);
-}
-.prev-vp-bar.va {
     background: rgba(112, 111, 211, 0.55);
 }
+.prev-vp-bar.va {
+    background: rgba(112, 111, 211, 0.72);
+}
 .prev-vp-bar.poc {
-    background: rgba(255, 214, 10, 0.5);
+    background: rgba(255, 214, 10, 0.78);
 }
 .prev-vp-label {
     position: absolute;
