@@ -4060,27 +4060,29 @@ function drawVolumeProfile(pane) {
     else if (normalized <= 7.5) step = 5 * magnitude;
     else step = 10 * magnitude;
 
-    // Draw price ticks at regular intervals
-    ctx.fillStyle = 'rgba(150, 160, 175, 0.55)';
-    ctx.font = '8px "Space Grotesk", monospace';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-
+    // Draw price ticks at regular intervals - brighter and more visible
     let tickPrice = Math.ceil(model.minPrice / step) * step;
     while (tickPrice <= model.maxPrice) {
         const y = pane.candleSeries.priceToCoordinate(tickPrice);
         if (y !== null && y >= 15 && y <= vpH - 15) {
-            // Tick mark line
-            ctx.strokeStyle = 'rgba(80, 90, 110, 0.4)';
+            // Tick mark line - bright
+            ctx.strokeStyle = 'rgba(200, 210, 230, 0.6)';
             ctx.lineWidth = 1;
             ctx.beginPath();
             ctx.moveTo(histRight, y);
-            ctx.lineTo(histRight + 4, y);
+            ctx.lineTo(histRight + 5, y);
             ctx.stroke();
 
-            // Price label
-            ctx.fillStyle = 'rgba(150, 160, 175, 0.65)';
-            ctx.fillText(formatPrice(tickPrice), histRight + 6, y);
+            // Price label with subtle background for readability
+            const labelText = formatPrice(tickPrice);
+            ctx.font = '8px "Space Grotesk", monospace';
+            const textW = ctx.measureText(labelText).width;
+            ctx.fillStyle = 'rgba(25, 30, 40, 0.85)';
+            ctx.fillRect(histRight + 2, y - 6, textW + 6, 12);
+            ctx.fillStyle = 'rgba(220, 230, 245, 0.95)';  // Bright white-blue
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(labelText, histRight + 5, y);
         }
         tickPrice += step;
     }
