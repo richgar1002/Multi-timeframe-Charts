@@ -4048,14 +4048,42 @@ function drawVolumeProfile(pane) {
     drawKeyLine(vahPrice, 'VAH', 'rgba(112, 111, 211, 0.85)', 1);
     drawKeyLine(valPrice, 'VAL', 'rgba(112, 111, 211, 0.85)', 1);
 
-    // ── Price axis strip: min / max price at edges ──
-    ctx.fillStyle = 'rgba(150, 160, 175, 0.45)';
+    // ── Price axis strip: regular tick marks ──
+    const priceRange = model.maxPrice - model.minPrice;
+    const targetTicks = Math.floor(vpH / 40); // Aim for ~40px spacing
+    const rawStep = priceRange / targetTicks;
+    const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    const normalized = rawStep / magnitude;
+    let step;
+    if (normalized <= 1.5) step = magnitude;
+    else if (normalized <= 3.5) step = 2 * magnitude;
+    else if (normalized <= 7.5) step = 5 * magnitude;
+    else step = 10 * magnitude;
+
+    // Draw price ticks at regular intervals
+    ctx.fillStyle = 'rgba(150, 160, 175, 0.55)';
     ctx.font = '8px "Space Grotesk", monospace';
     ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillText(formatPrice(model.maxPrice), histRight + 4, 15);
-    ctx.textBaseline = 'bottom';
-    ctx.fillText(formatPrice(model.minPrice), histRight + 4, vpH - 3);
+    ctx.textBaseline = 'middle';
+
+    let tickPrice = Math.ceil(model.minPrice / step) * step;
+    while (tickPrice <= model.maxPrice) {
+        const y = pane.candleSeries.priceToCoordinate(tickPrice);
+        if (y !== null && y >= 15 && y <= vpH - 15) {
+            // Tick mark line
+            ctx.strokeStyle = 'rgba(80, 90, 110, 0.4)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(histRight, y);
+            ctx.lineTo(histRight + 4, y);
+            ctx.stroke();
+
+            // Price label
+            ctx.fillStyle = 'rgba(150, 160, 175, 0.65)';
+            ctx.fillText(formatPrice(tickPrice), histRight + 6, y);
+        }
+        tickPrice += step;
+    }
 }
 
 // ─── Delta Profile (left panel) ──────────────────────────────────────────
