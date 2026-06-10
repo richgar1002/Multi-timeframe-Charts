@@ -5,6 +5,7 @@ import threading
 import socket
 import subprocess
 from pathlib import Path
+from datetime import datetime
 from flask import Flask, jsonify, request, send_from_directory
 from flask_sock import Sock
 import data_source
@@ -35,7 +36,11 @@ def index():
 @app.route("/api/log", methods=["POST"])
 def client_log():
     data = request.json or {}
-    print(f"\n>>> [BROWSER CONSOLE] {data.get('level', 'info').upper()}: {data.get('message')}\n", file=sys.stderr)
+    msg = f"\n>>> [BROWSER CONSOLE] {data.get('level', 'info').upper()}: {data.get('message')}\n"
+    print(msg, file=sys.stderr)
+    # Also append to file for persistence
+    with open("/tmp/mtfc_browser_errors.log", "a") as f:
+        f.write(f"{datetime.now().isoformat()} {msg}")
     return "", 204
 
 @app.route("/api/history")

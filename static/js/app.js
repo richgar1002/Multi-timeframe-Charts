@@ -1,3 +1,16 @@
+// Global error reporter
+window.onerror = function(msg, src, line, col, err) {
+    const report = `JS ERROR at ${src}:${line}:${col} — ${msg}\n${err ? err.stack : ''}`;
+    console.error(report);
+    fetch('/api/log', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({level:'error', message: report})});
+    return false;
+};
+window.addEventListener('unhandledrejection', function(e) {
+    const report = `UNHANDLED PROMISE: ${e.reason}\n${e.reason && e.reason.stack ? e.reason.stack : ''}`;
+    console.error(report);
+    fetch('/api/log', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({level:'error', message: report})});
+});
+
 // Dashboard State
 const state = {
     gridCount: 3,
@@ -3939,68 +3952,8 @@ function drawVolumeProfile(pane) {
         }
     });
 
-    // ── Current session VP → overlay on main chart (offset left of price scale) ──
-    if (!currentGroup || currentGroup.bars.length === 0) return;
+    // ── Current session VP → disabled (will re-implement via lightweight-charts primitives) ──
 
-    const model = buildVolumeProfileModelForBars(currentGroup.bars, settings);
-    if (!model || model.maxVol <= 0) return;
-
-    // Offset from right edge to sit LEFT of the built-in price scale (~65px wide)
-    const priceScaleOffset = 65;
-    const barMaxW = 80;
-
-    const block = document.createElement("div");
-    block.className = "current-session-block";
-    block.style.right  = `${priceScaleOffset}px`;
-    block.style.top    = "0";
-    block.style.width  = `${barMaxW}px`;
-    block.style.height = `${pane.dom.container.clientHeight}px`;
-
-    model.bins.forEach((vol, idx) => {
-        if (vol <= 0) return;
-        const priceTop = model.minPrice + (idx + 1) * model.binSize;
-        const priceBot = model.minPrice + idx * model.binSize;
-        const yTop = pane.candleSeries.priceToCoordinate(priceTop);
-        const yBot = pane.candleSeries.priceToCoordinate(priceBot);
-        if (yTop === null || yBot === null) return;
-
-        const barH   = Math.abs(yBot - yTop);
-        const barLen = Math.max(2, (vol / model.maxVol) * barMaxW);
-        const isPoc  = idx === model.pocBinIndex;
-        const isVA   = idx >= model.valueAreaLow && idx <= model.valueAreaHigh;
-
-        const bar = document.createElement("div");
-        bar.className = "curr-vp-bar" + (isPoc ? " poc" : (isVA ? " va" : ""));
-        bar.style.top    = `${Math.min(yTop, yBot)}px`;
-        bar.style.right  = "0px";
-        bar.style.width  = `${barLen}px`;
-        bar.style.height = `${Math.max(1, barH - 1)}px`;
-        block.appendChild(bar);
-    });
-
-    decorationOverlay.appendChild(block);
-
-    // POC / VAH / VAL marker lines for current session
-    const pocPrice = model.minPrice + (model.pocBinIndex  + 0.5) * model.binSize;
-    const vahPrice = model.minPrice + (model.valueAreaHigh + 0.5) * model.binSize;
-    const valPrice = model.minPrice + (model.valueAreaLow  + 0.5) * model.binSize;
-
-    [[pocPrice, 'POC', 'curr-marker-poc'],
-     [vahPrice, 'VAH', 'curr-marker-vah'],
-     [valPrice, 'VAL', 'curr-marker-val']].forEach(([price, label, cls]) => {
-        const y = pane.candleSeries.priceToCoordinate(price);
-        if (y === null) return;
-        const line = document.createElement("div");
-        line.className = `curr-marker-line ${cls}`;
-        line.style.top = `${y}px`;
-        decorationOverlay.appendChild(line);
-
-        const txt = document.createElement("div");
-        txt.className = `curr-marker-text ${cls}`;
-        txt.style.top = `${y}px`;
-        txt.textContent = `${label} ${formatPrice(price)}`;
-        decorationOverlay.appendChild(txt);
-    });
 }
 
 // ─── Delta Profile (left panel) ──────────────────────────────────────────
