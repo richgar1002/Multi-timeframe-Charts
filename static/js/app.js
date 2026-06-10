@@ -1663,7 +1663,8 @@ function initLightweightChart(pane) {
         },
         rightPriceScale: {
             borderColor: '#2a3347',
-            autoScale: true
+            autoScale: true,
+            visible: false   // Hide built-in price labels — VP canvas draws its own axis on the far right
         },
         handleScale: {
             axisPressedMouseMove: {

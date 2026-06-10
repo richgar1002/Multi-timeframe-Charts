@@ -215,7 +215,8 @@ def _fetch_hyperliquid_history(coin, interval):
     
     sec = interval_seconds.get(native_interval, 60)
     end_time_ms = int(time.time() * 1000)
-    fetch_count = 1000 if aggregate_sec else 500
+    # Fetch enough bars to cover multiple days for VP overlays on all timeframe views
+    fetch_count = 5000 if aggregate_sec else 5000
     start_time_ms = end_time_ms - (sec * fetch_count * 1000)
     
     payload = {
