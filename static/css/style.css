@@ -856,7 +856,8 @@ select:hover, input:focus {
 .current-session-block {
     position: absolute;
     pointer-events: none;
-    opacity: 0.55;
+    opacity: 0.65;
+    z-index: 15;
 }
 .curr-vp-bar {
     position: absolute;

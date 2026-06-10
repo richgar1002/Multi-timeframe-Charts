@@ -3939,19 +3939,19 @@ function drawVolumeProfile(pane) {
         }
     });
 
-    // ── Current session VP → overlay on main chart (anchored to right edge) ──
+    // ── Current session VP → overlay on main chart (offset left of price scale) ──
     if (!currentGroup || currentGroup.bars.length === 0) return;
 
     const model = buildVolumeProfileModelForBars(currentGroup.bars, settings);
     if (!model || model.maxVol <= 0) return;
 
-    // Anchor at the right edge of the chart (before the price scale)
-    const chartWidth = pane.dom.container.clientWidth;
-    const barMaxW = 80; // Width of the VP overlay
+    // Offset from right edge to sit LEFT of the built-in price scale (~65px wide)
+    const priceScaleOffset = 65;
+    const barMaxW = 80;
 
     const block = document.createElement("div");
     block.className = "current-session-block";
-    block.style.right  = "0px";
+    block.style.right  = `${priceScaleOffset}px`;
     block.style.top    = "0";
     block.style.width  = `${barMaxW}px`;
     block.style.height = `${pane.dom.container.clientHeight}px`;
