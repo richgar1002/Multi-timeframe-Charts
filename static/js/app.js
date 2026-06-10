@@ -195,7 +195,7 @@ function initGrid() {
                 atrPeriod: 14,
                 vpBins: 48,
                 vpWidth: 22,
-                vpValueAreaPct: 68,
+                vpValueAreaPct: 70,
                 vpDetail: 8,
                 showVertGrid: true,
                 showHorzGrid: true,
@@ -742,6 +742,13 @@ function createChartPane(paneId, initialSymbol, initialTimeframe, initialIndicat
                                 <span class="settings-value" data-setting-value="vpWidth">22%</span>
                             </div>
                         </div>
+                        <div class="settings-row settings-range-row">
+                            <label for="${paneId}-va-pct">Value Area %</label>
+                            <div class="settings-range-control">
+                                <input type="range" id="${paneId}-va-pct" data-setting="vpValueAreaPct" min="40" max="95" step="1">
+                                <span class="settings-value" data-setting-value="vpValueAreaPct">70%</span>
+                            </div>
+                        </div>
                     </div>
                     </div>
                     <div class="settings-pane" id="${paneId}-sett-pane">
@@ -1013,7 +1020,8 @@ function createChartPane(paneId, initialSymbol, initialTimeframe, initialIndicat
     indMenu.querySelectorAll("[data-setting-value]").forEach(label => {
         const key = label.getAttribute("data-setting-value");
         if (settings[key] !== undefined) {
-            label.textContent = `${settings[key]}%`;
+            const val = settings[key];
+            label.textContent = key === "oscillatorHeightPct" ? `${val}%` : (key === "vpWidth" ? `${val}%` : (key === "vpValueAreaPct" ? `${val}%` : String(val)));
         }
     });
     
@@ -1104,7 +1112,7 @@ function createChartPane(paneId, initialSymbol, initialTimeframe, initialIndicat
                 paneObj.indicators.settings.oscillatorHeights = {};
             }
             indMenu.querySelectorAll(`[data-setting-value="${key}"]`).forEach(label => {
-                label.textContent = key === "oscillatorHeightPct" ? `${val}%` : String(val);
+                label.textContent = key === "oscillatorHeightPct" ? `${val}%` : (key === "vpWidth" ? `${val}%` : (key === "vpValueAreaPct" ? `${val}%` : String(val)));
             });
 
             localStorage.setItem(`pane_config_${paneId}`, JSON.stringify({
